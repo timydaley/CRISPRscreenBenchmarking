@@ -1,0 +1,102 @@
+---
+title: "Bester lncRNA CRISPRa screen"
+author: "Timothy Daley"
+date: "9/5/2018"
+output: html_document
+---
+
+```{r}
+Bester2018lncRNAsgRNAcounts = read.table(file = "mmc6.txt", header = TRUE)
+gene = sapply(Bester2018lncRNAsgRNAcounts$Gene, toString)
+gene[grep("NONTARGETING", gene)] = "NONTARGETING"
+gene = factor(gene)
+Bester2018lncRNAsgRNAcounts = data.frame(Gene = gene, Bester2018lncRNAsgRNAcounts[ ,c(1, 3:6)])
+sgRNAseqs = read.table(file = "1-s2.0-S0092867418303842-mmc5.txt", header = TRUE)
+sgRNAseqs = sgRNAseqs[which(sgRNAseqs$score %in% Bester2018lncRNAsgRNAcounts$sgRNA), ]
+counts = Bester2018lncRNAsgRNAcounts[ ,3:6]
+colData = data.frame(condition = factor(c(0, 0, 1, 1)))
+rownames(colData) = colnames(counts)
+Bester2018lncRNADESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, 
+                                                      colData = colData, design = ~ condition)
+Bester2018lncRNADESeq = DESeq2::DESeq(Bester2018lncRNADESeq)
+Bester2018lncRNADESeq = DESeq2::results(Bester2018lncRNADESeq)
+log2fc = Bester2018lncRNADESeq$log2FoldChange
+log2fc.negCtrl = log2fc[which(gene == "NONTARGETING")]
+log2fc.geneTargeting = log2fc[-which(gene == "NONTARGETING")]
+library(ggplot2)
+x = data.frame(log2fc = log2fc, category = c(rep("negative control", 
+                                                 times = length(log2fc.negCtrl)), 
+                                             rep("gene targeting", times = length(log2fc.geneTargeting))))
+ggplot(x, aes(x = log2fc, colour = category)) + geom_density() + theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+```{r}
+Bester2018GeneGuideCounts = read.table(file = "1-s2.0-S0092867418303842-mmc4.txt", header = TRUE)
+counts = Bester2018GeneGuideCounts[ ,3:6]
+colData = data.frame(condition = factor(c(0, 0, 1, 1)))
+rownames(colData) = colnames(counts)
+Bester2018GeneDESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, 
+                                                     colData = colData, design = ~ condition)
+Bester2018GeneDESeq = DESeq2::DESeq(Bester2018GeneDESeq)
+Bester2018GeneDESeq = DESeq2::results(Bester2018GeneDESeq)
+log2fc = Bester2018GeneDESeq$log2FoldChange
+library(ggplot2)
+x = data.frame(log2fc = log2fc)
+ggplot(x, aes(x = log2fc)) + geom_density() + theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+library(CRISPhieRmix)
+gene = Bester2018GeneGuideCounts$Gene
+library(biomaRt)
+#mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+mart = useMart(biomart = "ENSEMBL_MART_ENSEMBL", 
+              dataset = "hsapiens_gene_ensembl", 
+              host = "www.ensembl.org",
+              ensemblRedirect = FALSE)
+mart = getBM(attributes = c("refseq_mrna", "external_gene_name"), mart = mart)
+gene = mart$external_gene_name[match(gene, mart$refseq_mrna)]
+log2fc = log2fc[which(!is.na(gene))]
+gene = gene[which(!is.na(gene))]
+gene = factor(gene, levels = unique(gene))
+Bester2018GeneCRISPhieRmix = CRISPhieRmix(x = log2fc, geneIds = gene, PLOT = TRUE, VERBOSE = TRUE, BIMODAL = TRUE)
+hist(Bester2018GeneCRISPhieRmix$FDR, breaks = 100, col = "grey")
+Bester2018GeneCRISPhieRmixGeneScores = data.frame(FDR = Bester2018GeneCRISPhieRmix$FDR, gene = Bester2018GeneCRISPhieRmix$genes)
+head(Bester2018GeneCRISPhieRmixGeneScores[order(Bester2018GeneCRISPhieRmixGeneScores$FDR, decreasing = FALSE), ], 30)
+ARAcAssociatedGenes = read.table(file = "ARAcAssociatedGenes.txt", header = TRUE)
+dim(ARAcAssociatedGenes)
+length(which(ARAcAssociatedGenes$external_gene_name %in% Bester2018GeneCRISPhieRmixGeneScores$gene[which(Bester2018GeneCRISPhieRmixGeneScores$FDR < 0.01)]))/length(ARAcAssociatedGenes$external_gene_name)
+length(which(ARAcAssociatedGenes$external_gene_name %in% Bester2018GeneCRISPhieRmixGeneScores$gene[which(Bester2018GeneCRISPhieRmixGeneScores$FDR < 0.05)]))/length(ARAcAssociatedGenes$external_gene_name)
+length(which(ARAcAssociatedGenes$external_gene_name %in% Bester2018GeneCRISPhieRmixGeneScores$gene[which(Bester2018GeneCRISPhieRmixGeneScores$FDR < 0.1)]))/length(ARAcAssociatedGenes$external_gene_name)
+sum(Bester2018GeneCRISPhieRmixGeneScores$FDR < 0.1)
+sum(Bester2018GeneCRISPhieRmixGeneScores$FDR < 0.05)
+sum(Bester2018GeneCRISPhieRmixGeneScores$FDR < 0.01)
+x = data.frame(log2fc = log2fc, ARAcAssociatedGenes = gene %in% ARAcAssociatedGenes$external_gene_name)
+ggplot(x, aes(x = log2fc, col = ARAcAssociatedGenes)) + geom_density() + theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+x = data.frame(log2fc = log2fc, topHit = gene %in% Bester2018GeneCRISPhieRmixGeneScores$gene[head(order(Bester2018GeneCRISPhieRmixGeneScores$FDR, decreasing = FALSE), 50)])
+ggplot(x, aes(x = log2fc, col = topHit)) + geom_density() + theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+```{bash eval=FALSE}
+#!/bin/bash
+mageck mle -k mmc6.txt -d design_matrix.txt --output-prefix mageckMle --control-sgrna nontargeting.txt
+```
+
+
+
+
+```{r}
+mageckMle.gene.gene_summary = read.table(file = "mageckMle.gene.gene_summary.txt", header = TRUE)
+library(biomaRt)
+#mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+mart = useMart(biomart = "ENSEMBL_MART_ENSEMBL", 
+              dataset = "hsapiens_gene_ensembl", 
+              host = "www.ensembl.org",
+              ensemblRedirect = FALSE)
+mart = getBM(attributes = c("refseq_mrna", "external_gene_name"), mart = mart)
+mageckMle.gene.gene_summary$Gene = mart$external_gene_name[match(mageckMle.gene.gene_summary$Gene, mart$refseq_mrna)]
+length(which(ARAcAssociatedGenes$external_gene_name %in% mageckMle.gene.gene_summary$Gene[which(mageckMle.gene.gene_summary$arac.fdr < 0.1)]))/sum(mageckMle.gene.gene_summary$arac.fdr < 0.1)
+Bester2018GeneCRISPhieRmixGeneScores[which(Bester2018GeneCRISPhieRmixGeneScores$gene %in% mageckMle.gene.gene_summary$Gene[which(mageckMle.gene.gene_summary$arac.fdr < 0.1)]), ]
+```

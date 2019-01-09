@@ -1,0 +1,15 @@
+---
+title: "test"
+author: "Timothy Daley"
+date: "12/3/2018"
+output: html_document
+---
+
+```{r}
+Sys.setenv(PATH = paste("/Users/Daley/miniconda2/lib/", Sys.getenv("PATH"), sep=":"))
+```
+
+```{bash}
+#!/bin/bash
+/Users/Daley//sgRNA/sgRNA2Groups/mageck-0.5.7/bin/mageck --help
+```

@@ -1,0 +1,972 @@
+---
+title: "Testing CRISPR methods on CRISPR dropout screens from Hart et al 2015"
+author: "Timothy Daley"
+date: "7/31/2018"
+output: html_document
+---
+
+The goal here is to evaluate methods on a CRISPR knockout screen.
+
+```{r cache=TRUE}
+Hart2015HCT116lib1 = read.table(file = "readcount-HCT116_1-lib1.txt", header = TRUE, sep = "\t")
+sgRNAseqs = sapply(Hart2015HCT116lib1$GENE_CLONE, function(g) unlist(strsplit(toString(g), "_"))[2])
+head(sort(table(Hart2015HCT116lib1$GENE), decreasing = TRUE))
+GuideLabelsLib1 = read.table(file = "GuideLabelsLib1.txt", sep = "\t", header = TRUE)
+GuideLabelsLib1 = GuideLabelsLib1[match(sgRNAseqs, GuideLabelsLib1$gRNA.Sequence), ]
+counts = Hart2015HCT116lib1[ , c("LIB1_T0", "LIB1_T18_A", "LIB1_T18_B")]
+# remove guides with zero counts
+guides2remove = which(rowSums(counts) == 0)
+counts = counts[-guides2remove, ]
+GuideLabelsLib1 = GuideLabelsLib1[-guides2remove, ]
+sgRNAseqs = sgRNAseqs[-guides2remove]
+Hart2015HCT116lib1 = Hart2015HCT116lib1[-guides2remove, ]
+
+colData = data.frame(condition = factor(c(0, 1, 1)))
+rownames(colData) = colnames(counts)
+Hart2015HCT116lib1DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~condition)
+Hart2015HCT116lib1DESeq = DESeq2::DESeq(Hart2015HCT116lib1DESeq)
+Hart2015HCT116lib1DESeq = DESeq2::results(Hart2015HCT116lib1DESeq)
+log2fc = Hart2015HCT116lib1DESeq$log2FoldChange
+# remove promiscuous guides
+#log2fc = log2fc[-which(Hart2015HCT116lib1$GENE %in% c("chr10") & GuideLabelsLib1$Target == "chr10Promiscuous")]
+#Hart2015HCT116lib1 = Hart2015HCT116lib1[-which(Hart2015HCT116lib1$GENE %in% c("chr10") & GuideLabelsLib1$Target == "chr10Promiscuous"), ]
+
+negCtrlIndicator = (Hart2015HCT116lib1$GENE %in% c("chr10") & GuideLabelsLib1$Target == "chr10Rand")
+
+library(ggplot2)
+x = data.frame(log2fc = log2fc, negCtrl = factor(negCtrlIndicator))
+x$negCtrl = factor(x$negCtrl, levels = c("TRUE", "FALSE"))
+ggplot(x, aes(x = log2fc, col = negCtrl)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+log2fc.geneTargeting = log2fc[which(!negCtrlIndicator)]
+log2fc.negCtrl = log2fc[which(negCtrlIndicator)]
+geneIds = Hart2015HCT116lib1$GENE[which(!negCtrlIndicator)]
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+library(CRISPhieRmix)
+Hart2015HCT116lib1CRISPhieRmix = CRISPhieRmix::CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -8, sigma = 2, PLOT = TRUE, VERBOSE = TRUE) 
+hist(Hart2015HCT116lib1CRISPhieRmix$FDR, breaks = 100)
+
+write.table(data.frame(Spacer = Hart2015HCT116lib1$GENE_CLONE, Gene = Hart2015HCT116lib1$GENE, counts), file = "Hart2015HCT116lib1Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(Hart2015HCT116lib1$GENE_CLONE[which(negCtrlIndicator)], file = "Hart2015HCT116lib1NegCtrlGuides.txt", sep = "\n", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(Samples = colnames(counts), baseline = rep(1, times = dim(counts)[2]), colData), file = "design_matrix.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+system("mageck mle -k Hart2015HCT116lib1Counts.txt -d design_matrix.txt --output-prefix Hart2015HCT116lib1MageckMle --control-sgrna Hart2015HCT116lib1NegCtrlGuides.txt")
+Hart2015HCT116lib1MageckMle = read.table(file = "Hart2015HCT116lib1MageckMle.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015HCT116lib1MageckMle$condition.fdr, breaks = 100)
+
+system("mageck test -k Hart2015HCT116lib1Counts.txt -t LIB1_T18_A,LIB1_T18_B  --control-sgrna Hart2015HCT116lib1NegCtrlGuides.txt --output-prefix Hart2015HCT116lib1MageckRra")
+Hart2015HCT116lib1MageckRra = read.table(file = "Hart2015HCT116lib1MageckRra.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015HCT116lib1MageckRra$neg.fdr, breaks = 100)
+hist(Hart2015HCT116lib1MageckRra$pos.fdr, breaks = 100)
+
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc.geneTargeting[which(geneIds == g)], log2fc.negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+hist(MannWhitneyFdrs, breaks = 100)
+```
+
+
+```{r cache=TRUE}
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(gene = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% Hart2015HCT116lib1$GENE), ]
+
+sum(unique(Hart2015HCT116lib1$GENE) %in% ConstitutiveCoreEssentialGenes)
+sum(unique(Hart2015HCT116lib1$GENE) %in% NonEssentialGenes)
+Hart2015HCT116lib1CRISPhieRmixScoresEssential = data.frame(gene = Hart2015HCT116lib1CRISPhieRmix$genes, FDR = Hart2015HCT116lib1CRISPhieRmix$FDR)
+Hart2015HCT116lib1CRISPhieRmixScoresEssential = Hart2015HCT116lib1CRISPhieRmixScoresEssential[which(Hart2015HCT116lib1CRISPhieRmixScoresEssential$gene %in% EssentialGenes$gene), ]
+Hart2015HCT116lib1CRISPhieRmixScoresEssential = Hart2015HCT116lib1CRISPhieRmixScoresEssential[match(EssentialGenes$gene, Hart2015HCT116lib1CRISPhieRmixScoresEssential$gene), ]
+dim(Hart2015HCT116lib1CRISPhieRmixScoresEssential)
+Hart2015HCT116lib1MageckMleEssential = Hart2015HCT116lib1MageckMle[which(Hart2015HCT116lib1MageckMle$Gene %in% EssentialGenes$gene), ]
+Hart2015HCT116lib1MageckMleEssential = Hart2015HCT116lib1MageckMleEssential[match(EssentialGenes$gene, Hart2015HCT116lib1MageckMleEssential$Gene), ]
+dim(Hart2015HCT116lib1MageckMleEssential)
+Hart2015HCT116lib1MageckRraEssential = Hart2015HCT116lib1MageckRra[which(Hart2015HCT116lib1MageckRra$id %in% EssentialGenes$gene), ]
+Hart2015HCT116lib1MageckRraEssential = Hart2015HCT116lib1MageckRraEssential[match(EssentialGenes$gene, Hart2015HCT116lib1MageckRraEssential$id), ]
+dim(Hart2015HCT116lib1MageckRraEssential)
+
+sum(Hart2015HCT116lib1CRISPhieRmixScoresEssential$FDR < 0.05)
+sum(Hart2015HCT116lib1CRISPhieRmixScoresEssential$FDR < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HCT116lib1CRISPhieRmixScoresEssential$FDR < 0.1)
+sum(Hart2015HCT116lib1CRISPhieRmixScoresEssential$FDR < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HCT116lib1CRISPhieRmixScoresEssentialROC = roc(EssentialGenes$essential, Hart2015HCT116lib1CRISPhieRmixScoresEssential$FDR)
+Hart2015HCT116lib1CRISPhieRmixScoresEssentialROC
+
+sum(Hart2015HCT116lib1MageckMleEssential$condition.fdr < 0.05)
+sum(Hart2015HCT116lib1MageckMleEssential$condition.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HCT116lib1MageckMleEssential$condition.fdr < 0.1)
+sum(Hart2015HCT116lib1MageckMleEssential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HCT116lib1MageckMleEssentialROC = roc(EssentialGenes$essential, Hart2015HCT116lib1MageckMleEssential$condition.fdr)
+Hart2015HCT116lib1MageckMleEssentialROC
+
+sum(Hart2015HCT116lib1MageckRraEssential$neg.fdr < 0.05)
+sum(Hart2015HCT116lib1MageckRraEssential$neg.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HCT116lib1MageckRraEssential$neg.fdr < 0.1)
+sum(Hart2015HCT116lib1MageckRraEssential$neg.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HCT116lib1MageckRraEssentialROC = roc(EssentialGenes$essential, Hart2015HCT116lib1MageckRraEssential$neg.fdr)
+Hart2015HCT116lib1MageckRraEssentialROC
+
+MannWhitneyFdrs = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+MannWhitneyFdrs = MannWhitneyFdrs[match(EssentialGenes$gene, names(MannWhitneyFdrs))]
+sum(MannWhitneyFdrs < 0.05)
+sum(MannWhitneyFdrs < 0.05 & EssentialGenes$essential == 1)
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+MannWhitneyFdrsROC = roc(EssentialGenes$essential, MannWhitneyFdrs)
+MannWhitneyFdrsROC
+
+cols = RColorBrewer::brewer.pal(6, "Set1")
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015HCT116lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015HCT116lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015HCT116lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015HCT116lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015HCT116lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015HCT116lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+pdf('Hart2015HCT116lib1RocCurves.pdf')
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015HCT116lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015HCT116lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015HCT116lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015HCT116lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015HCT116lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015HCT116lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+dev.off()
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+Hart2015HCT116lib1CRISPhieRmixScoresEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HCT116lib1CRISPhieRmixScoresEssential$FDR, EssentialGenes$essential))
+MannWhitneyFdrsFdrCurve = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs, EssentialGenes$essential))
+Hart2015HCT116lib1MageckMleEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HCT116lib1MageckMleEssential$condition.fdr, EssentialGenes$essential))
+Hart2015HCT116lib1MageckRraEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HCT116lib1MageckRraEssential$neg.fdr, EssentialGenes$essential))
+
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015HCT116lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015HCT116lib1MageckMleEssentialFdrCurve[!is.na(Hart2015HCT116lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015HCT116lib1MageckRraEssentialFdrCurve[!is.na(Hart2015HCT116lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015HCT116lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015HCT116lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+pdf('Hart2015HCT116lib1EmpiricalVsEstimatedFdr.pdf')
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015HCT116lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015HCT116lib1MageckMleEssentialFdrCurve[!is.na(Hart2015HCT116lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015HCT116lib1MageckRraEssentialFdrCurve[!is.na(Hart2015HCT116lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015HCT116lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015HCT116lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+dev.off()
+```
+
+
+# HCT116_2
+
+```{r cache=TRUE}
+Hart2015HCT116_2_lib1 = read.table(file = "readcount-HCT116_2-lib1.txt", header = TRUE, sep = "\t")
+sgRNAseqs = sapply(Hart2015HCT116_2_lib1$GENE_CLONE, function(g) unlist(strsplit(toString(g), "_"))[2])
+head(sort(table(Hart2015HCT116_2_lib1$GENE), decreasing = TRUE))
+GuideLabels = read.table(file = "GuideLabelsLib1.txt", sep = "\t", header = TRUE)
+GuideLabels = GuideLabels[match(sgRNAseqs, GuideLabels$gRNA.Sequence), ]
+counts = Hart2015HCT116_2_lib1[ , c("T0", "T18A", "T18B", "T18C")]
+# remove guides with zero counts
+guides2remove = which(rowSums(counts) == 0)
+counts = counts[-guides2remove, ]
+GuideLabels = GuideLabels[-guides2remove, ]
+sgRNAseqs = sgRNAseqs[-guides2remove]
+Hart2015HCT116_2_lib1 = Hart2015HCT116_2_lib1[-guides2remove, ]
+
+colData = data.frame(condition = factor(c(0, 1, 1, 1)))
+rownames(colData) = colnames(counts)
+Hart2015HCT116_2_lib1DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~condition)
+Hart2015HCT116_2_lib1DESeq = DESeq2::DESeq(Hart2015HCT116_2_lib1DESeq)
+Hart2015HCT116_2_lib1DESeq = DESeq2::results(Hart2015HCT116_2_lib1DESeq)
+log2fc = Hart2015HCT116_2_lib1DESeq$log2FoldChange
+# remove promiscuous guides
+#log2fc = log2fc[-which(Hart2015HCT116_2_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous")]
+#Hart2015HCT116_2_lib1 = Hart2015HCT116_2_lib1[-which(Hart2015HCT116_2_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous"), ]
+
+negCtrlIndicator = (Hart2015HCT116_2_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Rand")
+
+library(ggplot2)
+x = data.frame(log2fc = log2fc, negCtrl = factor(negCtrlIndicator))
+x$negCtrl = factor(x$negCtrl, levels = c("TRUE", "FALSE"))
+ggplot(x, aes(x = log2fc, col = negCtrl)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+
+log2fc.geneTargeting = log2fc[which(!negCtrlIndicator)]
+log2fc.negCtrl = log2fc[which(negCtrlIndicator)]
+geneIds = Hart2015HCT116_2_lib1$GENE[which(!negCtrlIndicator)]
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+library(CRISPhieRmix)
+Hart2015HCT116_2_lib1CRISPhieRmix = CRISPhieRmix::CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -8, sigma = 2, PLOT = TRUE, VERBOSE = TRUE) 
+hist(Hart2015HCT116_2_lib1CRISPhieRmix$FDR, breaks = 100)
+
+write.table(data.frame(Spacer = Hart2015HCT116_2_lib1$GENE_CLONE, Gene = Hart2015HCT116_2_lib1$GENE, counts), file = "Hart2015HCT116_2_lib1Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(Hart2015HCT116_2_lib1$GENE_CLONE[which(negCtrlIndicator)], file = "Hart2015HCT116_2_lib1NegCtrlGuides.txt", sep = "\n", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(Samples = colnames(counts), baseline = rep(1, times = dim(counts)[2]), colData), file = "design_matrix.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+system("mageck mle -k Hart2015HCT116_2_lib1Counts.txt -d design_matrix.txt --output-prefix Hart2015HCT116_2_lib1MageckMle --control-sgrna Hart2015HCT116_2_lib1NegCtrlGuides.txt")
+Hart2015HCT116_2_lib1MageckMle = read.table(file = "Hart2015HCT116_2_lib1MageckMle.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015HCT116_2_lib1MageckMle$condition.fdr, breaks = 100)
+
+system("mageck test -k Hart2015HCT116_2_lib1Counts.txt -t T18A,T18B,T18C  --control-sgrna Hart2015HCT116_2_lib1NegCtrlGuides.txt --output-prefix Hart2015HCT116_2_lib1MageckRra")
+Hart2015HCT116_2_lib1MageckRra = read.table(file = "Hart2015HCT116_2_lib1MageckRra.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015HCT116_2_lib1MageckRra$neg.fdr, breaks = 100)
+hist(Hart2015HCT116_2_lib1MageckRra$pos.fdr, breaks = 100)
+
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc.geneTargeting[which(geneIds == g)], log2fc.negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+hist(MannWhitneyFdrs, breaks = 100)
+```
+
+
+```{r cache=TRUE}
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(gene = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% Hart2015HCT116_2_lib1$GENE), ]
+
+sum(unique(Hart2015HCT116_2_lib1$GENE) %in% ConstitutiveCoreEssentialGenes)
+sum(unique(Hart2015HCT116_2_lib1$GENE) %in% NonEssentialGenes)
+Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential = data.frame(gene = Hart2015HCT116_2_lib1CRISPhieRmix$genes, FDR = Hart2015HCT116_2_lib1CRISPhieRmix$FDR)
+Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential = Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential[which(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$gene %in% EssentialGenes$gene), ]
+Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential = Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential[match(EssentialGenes$gene, Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$gene), ]
+dim(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential)
+Hart2015HCT116_2_lib1MageckMleEssential = Hart2015HCT116_2_lib1MageckMle[which(Hart2015HCT116_2_lib1MageckMle$Gene %in% EssentialGenes$gene), ]
+Hart2015HCT116_2_lib1MageckMleEssential = Hart2015HCT116_2_lib1MageckMleEssential[match(EssentialGenes$gene, Hart2015HCT116_2_lib1MageckMleEssential$Gene), ]
+dim(Hart2015HCT116_2_lib1MageckMleEssential)
+Hart2015HCT116_2_lib1MageckRraEssential = Hart2015HCT116_2_lib1MageckRra[which(Hart2015HCT116_2_lib1MageckRra$id %in% EssentialGenes$gene), ]
+Hart2015HCT116_2_lib1MageckRraEssential = Hart2015HCT116_2_lib1MageckRraEssential[match(EssentialGenes$gene, Hart2015HCT116_2_lib1MageckRraEssential$id), ]
+dim(Hart2015HCT116_2_lib1MageckRraEssential)
+
+sum(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$FDR < 0.05)
+sum(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$FDR < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$FDR < 0.1)
+sum(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$FDR < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialROC = roc(EssentialGenes$essential, Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$FDR)
+Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialROC
+
+sum(Hart2015HCT116_2_lib1MageckMleEssential$condition.fdr < 0.05)
+sum(Hart2015HCT116_2_lib1MageckMleEssential$condition.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HCT116_2_lib1MageckMleEssential$condition.fdr < 0.1)
+sum(Hart2015HCT116_2_lib1MageckMleEssential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HCT116_2_lib1MageckMleEssentialROC = roc(EssentialGenes$essential, Hart2015HCT116_2_lib1MageckMleEssential$condition.fdr)
+Hart2015HCT116_2_lib1MageckMleEssentialROC
+
+sum(Hart2015HCT116_2_lib1MageckRraEssential$neg.fdr < 0.05)
+sum(Hart2015HCT116_2_lib1MageckRraEssential$neg.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HCT116_2_lib1MageckRraEssential$neg.fdr < 0.1)
+sum(Hart2015HCT116_2_lib1MageckRraEssential$neg.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HCT116_2_lib1MageckRraEssentialROC = roc(EssentialGenes$essential, Hart2015HCT116_2_lib1MageckRraEssential$neg.fdr)
+Hart2015HCT116_2_lib1MageckRraEssentialROC
+
+MannWhitneyFdrs = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+MannWhitneyFdrs = MannWhitneyFdrs[match(EssentialGenes$gene, names(MannWhitneyFdrs))]
+sum(MannWhitneyFdrs < 0.05)
+sum(MannWhitneyFdrs < 0.05 & EssentialGenes$essential == 1)
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+MannWhitneyFdrsROC = roc(EssentialGenes$essential, MannWhitneyFdrs)
+MannWhitneyFdrsROC
+
+cols = RColorBrewer::brewer.pal(6, "Set1")
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015HCT116_2_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015HCT116_2_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015HCT116_2_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015HCT116_2_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+pdf('Hart2015HCT116_2_lib1RocCurves.pdf')
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015HCT116_2_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015HCT116_2_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015HCT116_2_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015HCT116_2_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+dev.off()
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HCT116_2_lib1CRISPhieRmixScoresEssential$FDR, EssentialGenes$essential))
+MannWhitneyFdrsFdrCurve = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs, EssentialGenes$essential))
+Hart2015HCT116_2_lib1MageckMleEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HCT116_2_lib1MageckMleEssential$condition.fdr, EssentialGenes$essential))
+Hart2015HCT116_2_lib1MageckRraEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HCT116_2_lib1MageckRraEssential$neg.fdr, EssentialGenes$essential))
+
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015HCT116_2_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015HCT116_2_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015HCT116_2_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116_2_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015HCT116_2_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015HCT116_2_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+pdf('Hart2015HCT116_2_lib1EmpiricalVsEstimatedFdr.pdf')
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015HCT116_2_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015HCT116_2_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015HCT116_2_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116_2_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015HCT116_2_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015HCT116_2_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015HCT116_2_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+dev.off()
+```
+
+# HeLa
+
+```{r cache=TRUE}
+Hart2015HeLa_lib1 = read.table(file = "readcount-HeLa-lib1.txt", header = TRUE, sep = "\t")
+sgRNAseqs = sapply(Hart2015HeLa_lib1$GENE_CLONE, function(g) unlist(strsplit(toString(g), "_"))[2])
+head(sort(table(Hart2015HeLa_lib1$GENE), decreasing = TRUE))
+GuideLabels = read.table(file = "GuideLabelsLib1.txt", sep = "\t", header = TRUE)
+GuideLabels = GuideLabels[match(sgRNAseqs, GuideLabels$gRNA.Sequence), ]
+counts = Hart2015HeLa_lib1[ , c("T0", "T18A", "T18B", "T18C")]
+# remove guides with zero counts
+guides2remove = which(rowSums(counts) == 0)
+counts = counts[-guides2remove, ]
+GuideLabels = GuideLabels[-guides2remove, ]
+sgRNAseqs = sgRNAseqs[-guides2remove]
+Hart2015HeLa_lib1 = Hart2015HeLa_lib1[-guides2remove, ]
+
+colData = data.frame(condition = factor(c(0, 1, 1, 1)))
+rownames(colData) = colnames(counts)
+Hart2015HeLa_lib1DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~condition)
+Hart2015HeLa_lib1DESeq = DESeq2::DESeq(Hart2015HeLa_lib1DESeq)
+Hart2015HeLa_lib1DESeq = DESeq2::results(Hart2015HeLa_lib1DESeq)
+log2fc = Hart2015HeLa_lib1DESeq$log2FoldChange
+# remove promiscuous guides
+#log2fc = log2fc[-which(Hart2015HeLa_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous")]
+#Hart2015HeLa_lib1 = Hart2015HeLa_lib1[-which(Hart2015HeLa_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous"), ]
+
+negCtrlIndicator = (Hart2015HeLa_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Rand")
+
+library(ggplot2)
+x = data.frame(log2fc = log2fc, negCtrl = factor(negCtrlIndicator))
+x$negCtrl = factor(x$negCtrl, levels = c("TRUE", "FALSE"))
+ggplot(x, aes(x = log2fc, col = negCtrl)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+
+log2fc.geneTargeting = log2fc[which(!negCtrlIndicator)]
+log2fc.negCtrl = log2fc[which(negCtrlIndicator)]
+geneIds = Hart2015HeLa_lib1$GENE[which(!negCtrlIndicator)]
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+library(CRISPhieRmix)
+Hart2015HeLa_lib1CRISPhieRmix = CRISPhieRmix::CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -8, sigma = 2, PLOT = TRUE, VERBOSE = TRUE) 
+hist(Hart2015HeLa_lib1CRISPhieRmix$FDR, breaks = 100)
+
+write.table(data.frame(Spacer = Hart2015HeLa_lib1$GENE_CLONE, Gene = Hart2015HeLa_lib1$GENE, counts), file = "Hart2015HeLa_lib1Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(Hart2015HeLa_lib1$GENE_CLONE[which(negCtrlIndicator)], file = "Hart2015HeLa_lib1NegCtrlGuides.txt", sep = "\n", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(Samples = colnames(counts), baseline = rep(1, times = dim(counts)[2]), colData), file = "design_matrix.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+system("mageck mle -k Hart2015HeLa_lib1Counts.txt -d design_matrix.txt --output-prefix Hart2015HeLa_lib1MageckMle --control-sgrna Hart2015HeLa_lib1NegCtrlGuides.txt")
+Hart2015HeLa_lib1MageckMle = read.table(file = "Hart2015HeLa_lib1MageckMle.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015HeLa_lib1MageckMle$condition.fdr, breaks = 100)
+
+system("mageck test -k Hart2015HeLa_lib1Counts.txt -t T18A,T18B,T18C  --control-sgrna Hart2015HeLa_lib1NegCtrlGuides.txt --output-prefix Hart2015HeLa_lib1MageckRra")
+Hart2015HeLa_lib1MageckRra = read.table(file = "Hart2015HeLa_lib1MageckRra.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015HeLa_lib1MageckRra$neg.fdr, breaks = 100)
+hist(Hart2015HeLa_lib1MageckRra$pos.fdr, breaks = 100)
+
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc.geneTargeting[which(geneIds == g)], log2fc.negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+hist(MannWhitneyFdrs, breaks = 100)
+```
+
+
+```{r cache=TRUE}
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(gene = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% Hart2015HeLa_lib1$GENE), ]
+
+sum(unique(Hart2015HeLa_lib1$GENE) %in% ConstitutiveCoreEssentialGenes)
+sum(unique(Hart2015HeLa_lib1$GENE) %in% NonEssentialGenes)
+Hart2015HeLa_lib1CRISPhieRmixScoresEssential = data.frame(gene = Hart2015HeLa_lib1CRISPhieRmix$genes, FDR = Hart2015HeLa_lib1CRISPhieRmix$FDR)
+Hart2015HeLa_lib1CRISPhieRmixScoresEssential = Hart2015HeLa_lib1CRISPhieRmixScoresEssential[which(Hart2015HeLa_lib1CRISPhieRmixScoresEssential$gene %in% EssentialGenes$gene), ]
+Hart2015HeLa_lib1CRISPhieRmixScoresEssential = Hart2015HeLa_lib1CRISPhieRmixScoresEssential[match(EssentialGenes$gene, Hart2015HeLa_lib1CRISPhieRmixScoresEssential$gene), ]
+dim(Hart2015HeLa_lib1CRISPhieRmixScoresEssential)
+Hart2015HeLa_lib1MageckMleEssential = Hart2015HeLa_lib1MageckMle[which(Hart2015HeLa_lib1MageckMle$Gene %in% EssentialGenes$gene), ]
+Hart2015HeLa_lib1MageckMleEssential = Hart2015HeLa_lib1MageckMleEssential[match(EssentialGenes$gene, Hart2015HeLa_lib1MageckMleEssential$Gene), ]
+dim(Hart2015HeLa_lib1MageckMleEssential)
+Hart2015HeLa_lib1MageckRraEssential = Hart2015HeLa_lib1MageckRra[which(Hart2015HeLa_lib1MageckRra$id %in% EssentialGenes$gene), ]
+Hart2015HeLa_lib1MageckRraEssential = Hart2015HeLa_lib1MageckRraEssential[match(EssentialGenes$gene, Hart2015HeLa_lib1MageckRraEssential$id), ]
+dim(Hart2015HeLa_lib1MageckRraEssential)
+
+sum(Hart2015HeLa_lib1CRISPhieRmixScoresEssential$FDR < 0.05)
+sum(Hart2015HeLa_lib1CRISPhieRmixScoresEssential$FDR < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HeLa_lib1CRISPhieRmixScoresEssential$FDR < 0.1)
+sum(Hart2015HeLa_lib1CRISPhieRmixScoresEssential$FDR < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HeLa_lib1CRISPhieRmixScoresEssentialROC = roc(EssentialGenes$essential, Hart2015HeLa_lib1CRISPhieRmixScoresEssential$FDR)
+Hart2015HeLa_lib1CRISPhieRmixScoresEssentialROC
+
+sum(Hart2015HeLa_lib1MageckMleEssential$condition.fdr < 0.05)
+sum(Hart2015HeLa_lib1MageckMleEssential$condition.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HeLa_lib1MageckMleEssential$condition.fdr < 0.1)
+sum(Hart2015HeLa_lib1MageckMleEssential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HeLa_lib1MageckMleEssentialROC = roc(EssentialGenes$essential, Hart2015HeLa_lib1MageckMleEssential$condition.fdr)
+Hart2015HeLa_lib1MageckMleEssentialROC
+
+sum(Hart2015HeLa_lib1MageckRraEssential$neg.fdr < 0.05)
+sum(Hart2015HeLa_lib1MageckRraEssential$neg.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015HeLa_lib1MageckRraEssential$neg.fdr < 0.1)
+sum(Hart2015HeLa_lib1MageckRraEssential$neg.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015HeLa_lib1MageckRraEssentialROC = roc(EssentialGenes$essential, Hart2015HeLa_lib1MageckRraEssential$neg.fdr)
+Hart2015HeLa_lib1MageckRraEssentialROC
+
+MannWhitneyFdrs = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+MannWhitneyFdrs = MannWhitneyFdrs[match(EssentialGenes$gene, names(MannWhitneyFdrs))]
+sum(MannWhitneyFdrs < 0.05)
+sum(MannWhitneyFdrs < 0.05 & EssentialGenes$essential == 1)
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+MannWhitneyFdrsROC = roc(EssentialGenes$essential, MannWhitneyFdrs)
+MannWhitneyFdrsROC
+
+cols = RColorBrewer::brewer.pal(6, "Set1")
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015HeLa_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015HeLa_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015HeLa_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015HeLa_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+pdf('Hart2015HeLa_lib1RocCurves.pdf')
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015HeLa_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015HeLa_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015HeLa_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015HeLa_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+dev.off()
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+Hart2015HeLa_lib1CRISPhieRmixScoresEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HeLa_lib1CRISPhieRmixScoresEssential$FDR, EssentialGenes$essential))
+MannWhitneyFdrsFdrCurve = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs, EssentialGenes$essential))
+Hart2015HeLa_lib1MageckMleEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HeLa_lib1MageckMleEssential$condition.fdr, EssentialGenes$essential))
+Hart2015HeLa_lib1MageckRraEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015HeLa_lib1MageckRraEssential$neg.fdr, EssentialGenes$essential))
+
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015HeLa_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015HeLa_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015HeLa_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HeLa_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015HeLa_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015HeLa_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015HeLa_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+pdf('Hart2015HeLa_lib1EmpiricalVsEstimatedFdr.pdf')
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015HeLa_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015HeLa_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015HeLa_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HeLa_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015HeLa_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015HeLa_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015HeLa_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015HeLa_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+dev.off()
+```
+
+# RPE1
+
+```{r cache=TRUE}
+Hart2015RPE1_lib1 = read.table(file = "readcount-RPE1-lib1.txt", header = TRUE, sep = "\t")
+sgRNAseqs = sapply(Hart2015RPE1_lib1$GENE_CLONE, function(g) unlist(strsplit(toString(g), "_"))[2])
+head(sort(table(Hart2015RPE1_lib1$GENE), decreasing = TRUE))
+GuideLabels = read.table(file = "GuideLabelsLib1.txt", sep = "\t", header = TRUE)
+GuideLabels = GuideLabels[match(sgRNAseqs, GuideLabels$gRNA.Sequence), ]
+counts = Hart2015RPE1_lib1[ , c("T0", "T18A", "T18B")]
+# remove guides with zero counts
+guides2remove = which(rowSums(counts) == 0)
+counts = counts[-guides2remove, ]
+GuideLabels = GuideLabels[-guides2remove, ]
+sgRNAseqs = sgRNAseqs[-guides2remove]
+Hart2015RPE1_lib1 = Hart2015RPE1_lib1[-guides2remove, ]
+
+colData = data.frame(condition = factor(c(0, 1, 1)))
+rownames(colData) = colnames(counts)
+Hart2015RPE1_lib1DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~condition)
+Hart2015RPE1_lib1DESeq = DESeq2::DESeq(Hart2015RPE1_lib1DESeq)
+Hart2015RPE1_lib1DESeq = DESeq2::results(Hart2015RPE1_lib1DESeq)
+log2fc = Hart2015RPE1_lib1DESeq$log2FoldChange
+# remove promiscuous guides
+#log2fc = log2fc[-which(Hart2015RPE1_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous")]
+#Hart2015RPE1_lib1 = Hart2015RPE1_lib1[-which(Hart2015RPE1_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous"), ]
+
+negCtrlIndicator = (Hart2015RPE1_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Rand")
+
+library(ggplot2)
+x = data.frame(log2fc = log2fc, negCtrl = factor(negCtrlIndicator))
+x$negCtrl = factor(x$negCtrl, levels = c("TRUE", "FALSE"))
+ggplot(x, aes(x = log2fc, col = negCtrl)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+log2fc.geneTargeting = log2fc[which(!negCtrlIndicator)]
+log2fc.negCtrl = log2fc[which(negCtrlIndicator)]
+geneIds = Hart2015RPE1_lib1$GENE[which(!negCtrlIndicator)]
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+library(CRISPhieRmix)
+Hart2015RPE1_lib1CRISPhieRmix = CRISPhieRmix::CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -8, sigma = 2, PLOT = TRUE, VERBOSE = TRUE) 
+hist(Hart2015RPE1_lib1CRISPhieRmix$FDR, breaks = 100)
+
+write.table(data.frame(Spacer = Hart2015RPE1_lib1$GENE_CLONE, Gene = Hart2015RPE1_lib1$GENE, counts), file = "Hart2015RPE1_lib1Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(Hart2015RPE1_lib1$GENE_CLONE[which(negCtrlIndicator)], file = "Hart2015RPE1_lib1NegCtrlGuides.txt", sep = "\n", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(Samples = colnames(counts), baseline = rep(1, times = dim(counts)[2]), colData), file = "design_matrix.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+system("mageck mle -k Hart2015RPE1_lib1Counts.txt -d design_matrix.txt --output-prefix Hart2015RPE1_lib1MageckMle --control-sgrna Hart2015RPE1_lib1NegCtrlGuides.txt")
+Hart2015RPE1_lib1MageckMle = read.table(file = "Hart2015RPE1_lib1MageckMle.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015RPE1_lib1MageckMle$condition.fdr, breaks = 100)
+
+system("mageck test -k Hart2015RPE1_lib1Counts.txt -t T18A,T18B  --control-sgrna Hart2015RPE1_lib1NegCtrlGuides.txt --output-prefix Hart2015RPE1_lib1MageckRra")
+Hart2015RPE1_lib1MageckRra = read.table(file = "Hart2015RPE1_lib1MageckRra.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015RPE1_lib1MageckRra$neg.fdr, breaks = 100)
+hist(Hart2015RPE1_lib1MageckRra$pos.fdr, breaks = 100)
+
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc.geneTargeting[which(geneIds == g)], log2fc.negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+hist(MannWhitneyFdrs, breaks = 100)
+```
+
+
+```{r cache=TRUE}
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(gene = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% Hart2015RPE1_lib1$GENE), ]
+
+sum(unique(Hart2015RPE1_lib1$GENE) %in% ConstitutiveCoreEssentialGenes)
+sum(unique(Hart2015RPE1_lib1$GENE) %in% NonEssentialGenes)
+Hart2015RPE1_lib1CRISPhieRmixScoresEssential = data.frame(gene = Hart2015RPE1_lib1CRISPhieRmix$genes, FDR = Hart2015RPE1_lib1CRISPhieRmix$FDR)
+Hart2015RPE1_lib1CRISPhieRmixScoresEssential = Hart2015RPE1_lib1CRISPhieRmixScoresEssential[which(Hart2015RPE1_lib1CRISPhieRmixScoresEssential$gene %in% EssentialGenes$gene), ]
+Hart2015RPE1_lib1CRISPhieRmixScoresEssential = Hart2015RPE1_lib1CRISPhieRmixScoresEssential[match(EssentialGenes$gene, Hart2015RPE1_lib1CRISPhieRmixScoresEssential$gene), ]
+dim(Hart2015RPE1_lib1CRISPhieRmixScoresEssential)
+Hart2015RPE1_lib1MageckMleEssential = Hart2015RPE1_lib1MageckMle[which(Hart2015RPE1_lib1MageckMle$Gene %in% EssentialGenes$gene), ]
+Hart2015RPE1_lib1MageckMleEssential = Hart2015RPE1_lib1MageckMleEssential[match(EssentialGenes$gene, Hart2015RPE1_lib1MageckMleEssential$Gene), ]
+dim(Hart2015RPE1_lib1MageckMleEssential)
+Hart2015RPE1_lib1MageckRraEssential = Hart2015RPE1_lib1MageckRra[which(Hart2015RPE1_lib1MageckRra$id %in% EssentialGenes$gene), ]
+Hart2015RPE1_lib1MageckRraEssential = Hart2015RPE1_lib1MageckRraEssential[match(EssentialGenes$gene, Hart2015RPE1_lib1MageckRraEssential$id), ]
+dim(Hart2015RPE1_lib1MageckRraEssential)
+
+sum(Hart2015RPE1_lib1CRISPhieRmixScoresEssential$FDR < 0.05)
+sum(Hart2015RPE1_lib1CRISPhieRmixScoresEssential$FDR < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015RPE1_lib1CRISPhieRmixScoresEssential$FDR < 0.1)
+sum(Hart2015RPE1_lib1CRISPhieRmixScoresEssential$FDR < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015RPE1_lib1CRISPhieRmixScoresEssentialROC = roc(EssentialGenes$essential, Hart2015RPE1_lib1CRISPhieRmixScoresEssential$FDR)
+Hart2015RPE1_lib1CRISPhieRmixScoresEssentialROC
+
+sum(Hart2015RPE1_lib1MageckMleEssential$condition.fdr < 0.05)
+sum(Hart2015RPE1_lib1MageckMleEssential$condition.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015RPE1_lib1MageckMleEssential$condition.fdr < 0.1)
+sum(Hart2015RPE1_lib1MageckMleEssential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015RPE1_lib1MageckMleEssentialROC = roc(EssentialGenes$essential, Hart2015RPE1_lib1MageckMleEssential$condition.fdr)
+Hart2015RPE1_lib1MageckMleEssentialROC
+
+sum(Hart2015RPE1_lib1MageckRraEssential$neg.fdr < 0.05)
+sum(Hart2015RPE1_lib1MageckRraEssential$neg.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015RPE1_lib1MageckRraEssential$neg.fdr < 0.1)
+sum(Hart2015RPE1_lib1MageckRraEssential$neg.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015RPE1_lib1MageckRraEssentialROC = roc(EssentialGenes$essential, Hart2015RPE1_lib1MageckRraEssential$neg.fdr)
+Hart2015RPE1_lib1MageckRraEssentialROC
+
+MannWhitneyFdrs = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+MannWhitneyFdrs = MannWhitneyFdrs[match(EssentialGenes$gene, names(MannWhitneyFdrs))]
+sum(MannWhitneyFdrs < 0.05)
+sum(MannWhitneyFdrs < 0.05 & EssentialGenes$essential == 1)
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+MannWhitneyFdrsROC = roc(EssentialGenes$essential, MannWhitneyFdrs)
+MannWhitneyFdrsROC
+
+cols = RColorBrewer::brewer.pal(6, "Set1")
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015RPE1_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015RPE1_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015RPE1_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015RPE1_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+pdf('Hart2015RPE1_lib1RocCurves.pdf')
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015RPE1_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015RPE1_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015RPE1_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015RPE1_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+dev.off()
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+Hart2015RPE1_lib1CRISPhieRmixScoresEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015RPE1_lib1CRISPhieRmixScoresEssential$FDR, EssentialGenes$essential))
+MannWhitneyFdrsFdrCurve = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs, EssentialGenes$essential))
+Hart2015RPE1_lib1MageckMleEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015RPE1_lib1MageckMleEssential$condition.fdr, EssentialGenes$essential))
+Hart2015RPE1_lib1MageckRraEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015RPE1_lib1MageckRraEssential$neg.fdr, EssentialGenes$essential))
+
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015RPE1_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015RPE1_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015RPE1_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015RPE1_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015RPE1_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015RPE1_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015RPE1_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+pdf('Hart2015RPE1_lib1EmpiricalVsEstimatedFdr.pdf')
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015RPE1_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015RPE1_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015RPE1_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015RPE1_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015RPE1_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015RPE1_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015RPE1_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015RPE1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+dev.off()
+```
+
+
+# DLD1
+
+```{r cache=TRUE}
+Hart2015DLD1_lib1 = read.table(file = "readcount-DLD1-lib1.txt", header = TRUE, sep = "\t")
+sgRNAseqs = sapply(Hart2015DLD1_lib1$GENE_CLONE, function(g) unlist(strsplit(toString(g), "_"))[2])
+head(sort(table(Hart2015DLD1_lib1$GENE), decreasing = TRUE))
+GuideLabels = read.table(file = "GuideLabelsLib1.txt", sep = "\t", header = TRUE)
+GuideLabels = GuideLabels[match(sgRNAseqs, GuideLabels$gRNA.Sequence), ]
+counts = Hart2015DLD1_lib1[ , c("DLD_T0", "DLD_ETOH_R1", "DLD_ETOH_R2", "DLD_ETOH_R3")]
+# remove guides with zero counts
+guides2remove = which(rowSums(counts) == 0)
+counts = counts[-guides2remove, ]
+GuideLabels = GuideLabels[-guides2remove, ]
+sgRNAseqs = sgRNAseqs[-guides2remove]
+Hart2015DLD1_lib1 = Hart2015DLD1_lib1[-guides2remove, ]
+
+colData = data.frame(condition = factor(c(0, 1, 1, 1)))
+rownames(colData) = colnames(counts)
+Hart2015DLD1_lib1DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~condition)
+Hart2015DLD1_lib1DESeq = DESeq2::DESeq(Hart2015DLD1_lib1DESeq)
+Hart2015DLD1_lib1DESeq = DESeq2::results(Hart2015DLD1_lib1DESeq)
+log2fc = Hart2015DLD1_lib1DESeq$log2FoldChange
+# remove promiscuous guides
+#log2fc = log2fc[-which(Hart2015DLD1_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous")]
+#Hart2015DLD1_lib1 = Hart2015DLD1_lib1[-which(Hart2015DLD1_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous"), ]
+
+negCtrlIndicator = (Hart2015DLD1_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Rand")
+
+library(ggplot2)
+x = data.frame(log2fc = log2fc, negCtrl = factor(negCtrlIndicator))
+x$negCtrl = factor(x$negCtrl, levels = c("TRUE", "FALSE"))
+ggplot(x, aes(x = log2fc, col = negCtrl)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+log2fc.geneTargeting = log2fc[which(!negCtrlIndicator)]
+log2fc.negCtrl = log2fc[which(negCtrlIndicator)]
+geneIds = Hart2015DLD1_lib1$GENE[which(!negCtrlIndicator)]
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+library(CRISPhieRmix)
+Hart2015DLD1_lib1CRISPhieRmix = CRISPhieRmix::CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -8, sigma = 2, PLOT = TRUE, VERBOSE = TRUE) 
+hist(Hart2015DLD1_lib1CRISPhieRmix$FDR, breaks = 100)
+
+write.table(data.frame(Spacer = Hart2015DLD1_lib1$GENE_CLONE, Gene = Hart2015DLD1_lib1$GENE, counts), file = "Hart2015DLD1_lib1Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(Hart2015DLD1_lib1$GENE_CLONE[which(negCtrlIndicator)], file = "Hart2015DLD1_lib1NegCtrlGuides.txt", sep = "\n", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(Samples = colnames(counts), baseline = rep(1, times = dim(counts)[2]), colData), file = "design_matrix.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+system("mageck mle -k Hart2015DLD1_lib1Counts.txt -d design_matrix.txt --output-prefix Hart2015DLD1_lib1MageckMle --control-sgrna Hart2015DLD1_lib1NegCtrlGuides.txt")
+Hart2015DLD1_lib1MageckMle = read.table(file = "Hart2015DLD1_lib1MageckMle.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015DLD1_lib1MageckMle$condition.fdr, breaks = 100)
+
+system("mageck test -k Hart2015DLD1_lib1Counts.txt -t DLD_ETOH_R1,DLD_ETOH_R2,DLD_ETOH_R3  --control-sgrna Hart2015DLD1_lib1NegCtrlGuides.txt --output-prefix Hart2015DLD1_lib1MageckRra")
+Hart2015DLD1_lib1MageckRra = read.table(file = "Hart2015DLD1_lib1MageckRra.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015DLD1_lib1MageckRra$neg.fdr, breaks = 100)
+hist(Hart2015DLD1_lib1MageckRra$pos.fdr, breaks = 100)
+
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc.geneTargeting[which(geneIds == g)], log2fc.negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+hist(MannWhitneyFdrs, breaks = 100)
+```
+
+
+```{r cache=TRUE}
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(gene = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% Hart2015DLD1_lib1$GENE), ]
+
+sum(unique(Hart2015DLD1_lib1$GENE) %in% ConstitutiveCoreEssentialGenes)
+sum(unique(Hart2015DLD1_lib1$GENE) %in% NonEssentialGenes)
+Hart2015DLD1_lib1CRISPhieRmixScoresEssential = data.frame(gene = Hart2015DLD1_lib1CRISPhieRmix$genes, FDR = Hart2015DLD1_lib1CRISPhieRmix$FDR)
+Hart2015DLD1_lib1CRISPhieRmixScoresEssential = Hart2015DLD1_lib1CRISPhieRmixScoresEssential[which(Hart2015DLD1_lib1CRISPhieRmixScoresEssential$gene %in% EssentialGenes$gene), ]
+Hart2015DLD1_lib1CRISPhieRmixScoresEssential = Hart2015DLD1_lib1CRISPhieRmixScoresEssential[match(EssentialGenes$gene, Hart2015DLD1_lib1CRISPhieRmixScoresEssential$gene), ]
+dim(Hart2015DLD1_lib1CRISPhieRmixScoresEssential)
+Hart2015DLD1_lib1MageckMleEssential = Hart2015DLD1_lib1MageckMle[which(Hart2015DLD1_lib1MageckMle$Gene %in% EssentialGenes$gene), ]
+Hart2015DLD1_lib1MageckMleEssential = Hart2015DLD1_lib1MageckMleEssential[match(EssentialGenes$gene, Hart2015DLD1_lib1MageckMleEssential$Gene), ]
+dim(Hart2015DLD1_lib1MageckMleEssential)
+Hart2015DLD1_lib1MageckRraEssential = Hart2015DLD1_lib1MageckRra[which(Hart2015DLD1_lib1MageckRra$id %in% EssentialGenes$gene), ]
+Hart2015DLD1_lib1MageckRraEssential = Hart2015DLD1_lib1MageckRraEssential[match(EssentialGenes$gene, Hart2015DLD1_lib1MageckRraEssential$id), ]
+dim(Hart2015DLD1_lib1MageckRraEssential)
+
+sum(Hart2015DLD1_lib1CRISPhieRmixScoresEssential$FDR < 0.05)
+sum(Hart2015DLD1_lib1CRISPhieRmixScoresEssential$FDR < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015DLD1_lib1CRISPhieRmixScoresEssential$FDR < 0.1)
+sum(Hart2015DLD1_lib1CRISPhieRmixScoresEssential$FDR < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015DLD1_lib1CRISPhieRmixScoresEssentialROC = roc(EssentialGenes$essential, Hart2015DLD1_lib1CRISPhieRmixScoresEssential$FDR)
+Hart2015DLD1_lib1CRISPhieRmixScoresEssentialROC
+
+sum(Hart2015DLD1_lib1MageckMleEssential$condition.fdr < 0.05)
+sum(Hart2015DLD1_lib1MageckMleEssential$condition.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015DLD1_lib1MageckMleEssential$condition.fdr < 0.1)
+sum(Hart2015DLD1_lib1MageckMleEssential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015DLD1_lib1MageckMleEssentialROC = roc(EssentialGenes$essential, Hart2015DLD1_lib1MageckMleEssential$condition.fdr)
+Hart2015DLD1_lib1MageckMleEssentialROC
+
+sum(Hart2015DLD1_lib1MageckRraEssential$neg.fdr < 0.05)
+sum(Hart2015DLD1_lib1MageckRraEssential$neg.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015DLD1_lib1MageckRraEssential$neg.fdr < 0.1)
+sum(Hart2015DLD1_lib1MageckRraEssential$neg.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015DLD1_lib1MageckRraEssentialROC = roc(EssentialGenes$essential, Hart2015DLD1_lib1MageckRraEssential$neg.fdr)
+Hart2015DLD1_lib1MageckRraEssentialROC
+
+MannWhitneyFdrs = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+MannWhitneyFdrs = MannWhitneyFdrs[match(EssentialGenes$gene, names(MannWhitneyFdrs))]
+sum(MannWhitneyFdrs < 0.05)
+sum(MannWhitneyFdrs < 0.05 & EssentialGenes$essential == 1)
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+MannWhitneyFdrsROC = roc(EssentialGenes$essential, MannWhitneyFdrs)
+MannWhitneyFdrsROC
+
+cols = RColorBrewer::brewer.pal(6, "Set1")
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015DLD1_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015DLD1_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015DLD1_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015DLD1_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+pdf('Hart2015DLD1_lib1RocCurves.pdf')
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015DLD1_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015DLD1_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015DLD1_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015DLD1_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+dev.off()
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+Hart2015DLD1_lib1CRISPhieRmixScoresEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015DLD1_lib1CRISPhieRmixScoresEssential$FDR, EssentialGenes$essential))
+MannWhitneyFdrsFdrCurve = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs, EssentialGenes$essential))
+Hart2015DLD1_lib1MageckMleEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015DLD1_lib1MageckMleEssential$condition.fdr, EssentialGenes$essential))
+Hart2015DLD1_lib1MageckRraEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015DLD1_lib1MageckRraEssential$neg.fdr, EssentialGenes$essential))
+
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015DLD1_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015DLD1_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015DLD1_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015DLD1_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015DLD1_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015DLD1_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015DLD1_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+pdf('Hart2015DLD1_lib1EmpiricalVsEstimatedFdr.pdf')
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015DLD1_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015DLD1_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015DLD1_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015DLD1_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015DLD1_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015DLD1_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015DLD1_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015DLD1_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+dev.off()
+```
+
+
+
+
+
+
+
+
+# GBM
+
+```{r cache=TRUE}
+Hart2015GBM_lib1 = read.table(file = "readcount-GBM-lib1.txt", header = TRUE, sep = "\t")
+sgRNAseqs = sapply(Hart2015GBM_lib1$GENE_CLONE, function(g) unlist(strsplit(toString(g), "_"))[2])
+head(sort(table(Hart2015GBM_lib1$GENE), decreasing = TRUE))
+GuideLabels = read.table(file = "GuideLabelsLib1.txt", sep = "\t", header = TRUE)
+GuideLabels = GuideLabels[match(sgRNAseqs, GuideLabels$gRNA.Sequence), ]
+counts = Hart2015GBM_lib1[ , c("T0", "T21A", "T21B")]
+# remove guides with zero counts
+guides2remove = which(rowSums(counts) == 0)
+counts = counts[-guides2remove, ]
+GuideLabels = GuideLabels[-guides2remove, ]
+sgRNAseqs = sgRNAseqs[-guides2remove]
+Hart2015GBM_lib1 = Hart2015GBM_lib1[-guides2remove, ]
+
+colData = data.frame(condition = factor(c(0, 1, 1)))
+rownames(colData) = colnames(counts)
+Hart2015GBM_lib1DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~condition)
+Hart2015GBM_lib1DESeq = DESeq2::DESeq(Hart2015GBM_lib1DESeq)
+Hart2015GBM_lib1DESeq = DESeq2::results(Hart2015GBM_lib1DESeq)
+log2fc = Hart2015GBM_lib1DESeq$log2FoldChange
+# remove promiscuous guides
+#log2fc = log2fc[-which(Hart2015GBM_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous")]
+#Hart2015GBM_lib1 = Hart2015GBM_lib1[-which(Hart2015GBM_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Promiscuous"), ]
+
+negCtrlIndicator = (Hart2015GBM_lib1$GENE %in% c("chr10") & GuideLabels$Target == "chr10Rand")
+
+library(ggplot2)
+x = data.frame(log2fc = log2fc, negCtrl = factor(negCtrlIndicator))
+x$negCtrl = factor(x$negCtrl, levels = c("TRUE", "FALSE"))
+ggplot(x, aes(x = log2fc, col = negCtrl)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+log2fc.geneTargeting = log2fc[which(!negCtrlIndicator)]
+log2fc.negCtrl = log2fc[which(negCtrlIndicator)]
+geneIds = Hart2015GBM_lib1$GENE[which(!negCtrlIndicator)]
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+library(CRISPhieRmix)
+Hart2015GBM_lib1CRISPhieRmix = CRISPhieRmix::CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -8, sigma = 2, PLOT = TRUE, VERBOSE = TRUE) 
+hist(Hart2015GBM_lib1CRISPhieRmix$FDR, breaks = 100)
+
+write.table(data.frame(Spacer = Hart2015GBM_lib1$GENE_CLONE, Gene = Hart2015GBM_lib1$GENE, counts), file = "Hart2015GBM_lib1Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(Hart2015GBM_lib1$GENE_CLONE[which(negCtrlIndicator)], file = "Hart2015GBM_lib1NegCtrlGuides.txt", sep = "\n", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(Samples = colnames(counts), baseline = rep(1, times = dim(counts)[2]), colData), file = "design_matrix.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+system("mageck mle -k Hart2015GBM_lib1Counts.txt -d design_matrix.txt --output-prefix Hart2015GBM_lib1MageckMle --control-sgrna Hart2015GBM_lib1NegCtrlGuides.txt")
+Hart2015GBM_lib1MageckMle = read.table(file = "Hart2015GBM_lib1MageckMle.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015GBM_lib1MageckMle$condition.fdr, breaks = 100)
+
+system("mageck test -k Hart2015GBM_lib1Counts.txt -t T21A,T21B  --control-sgrna Hart2015GBM_lib1NegCtrlGuides.txt --output-prefix Hart2015GBM_lib1MageckRra")
+Hart2015GBM_lib1MageckRra = read.table(file = "Hart2015GBM_lib1MageckRra.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Hart2015GBM_lib1MageckRra$neg.fdr, breaks = 100)
+hist(Hart2015GBM_lib1MageckRra$pos.fdr, breaks = 100)
+
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc.geneTargeting[which(geneIds == g)], log2fc.negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+hist(MannWhitneyFdrs, breaks = 100)
+```
+
+
+```{r cache=TRUE}
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(gene = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% Hart2015GBM_lib1$GENE), ]
+
+sum(unique(Hart2015GBM_lib1$GENE) %in% ConstitutiveCoreEssentialGenes)
+sum(unique(Hart2015GBM_lib1$GENE) %in% NonEssentialGenes)
+Hart2015GBM_lib1CRISPhieRmixScoresEssential = data.frame(gene = Hart2015GBM_lib1CRISPhieRmix$genes, FDR = Hart2015GBM_lib1CRISPhieRmix$FDR)
+Hart2015GBM_lib1CRISPhieRmixScoresEssential = Hart2015GBM_lib1CRISPhieRmixScoresEssential[which(Hart2015GBM_lib1CRISPhieRmixScoresEssential$gene %in% EssentialGenes$gene), ]
+Hart2015GBM_lib1CRISPhieRmixScoresEssential = Hart2015GBM_lib1CRISPhieRmixScoresEssential[match(EssentialGenes$gene, Hart2015GBM_lib1CRISPhieRmixScoresEssential$gene), ]
+dim(Hart2015GBM_lib1CRISPhieRmixScoresEssential)
+Hart2015GBM_lib1MageckMleEssential = Hart2015GBM_lib1MageckMle[which(Hart2015GBM_lib1MageckMle$Gene %in% EssentialGenes$gene), ]
+Hart2015GBM_lib1MageckMleEssential = Hart2015GBM_lib1MageckMleEssential[match(EssentialGenes$gene, Hart2015GBM_lib1MageckMleEssential$Gene), ]
+dim(Hart2015GBM_lib1MageckMleEssential)
+Hart2015GBM_lib1MageckRraEssential = Hart2015GBM_lib1MageckRra[which(Hart2015GBM_lib1MageckRra$id %in% EssentialGenes$gene), ]
+Hart2015GBM_lib1MageckRraEssential = Hart2015GBM_lib1MageckRraEssential[match(EssentialGenes$gene, Hart2015GBM_lib1MageckRraEssential$id), ]
+dim(Hart2015GBM_lib1MageckRraEssential)
+
+sum(Hart2015GBM_lib1CRISPhieRmixScoresEssential$FDR < 0.05)
+sum(Hart2015GBM_lib1CRISPhieRmixScoresEssential$FDR < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015GBM_lib1CRISPhieRmixScoresEssential$FDR < 0.1)
+sum(Hart2015GBM_lib1CRISPhieRmixScoresEssential$FDR < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015GBM_lib1CRISPhieRmixScoresEssentialROC = roc(EssentialGenes$essential, Hart2015GBM_lib1CRISPhieRmixScoresEssential$FDR)
+Hart2015GBM_lib1CRISPhieRmixScoresEssentialROC
+
+sum(Hart2015GBM_lib1MageckMleEssential$condition.fdr < 0.05)
+sum(Hart2015GBM_lib1MageckMleEssential$condition.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015GBM_lib1MageckMleEssential$condition.fdr < 0.1)
+sum(Hart2015GBM_lib1MageckMleEssential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015GBM_lib1MageckMleEssentialROC = roc(EssentialGenes$essential, Hart2015GBM_lib1MageckMleEssential$condition.fdr)
+Hart2015GBM_lib1MageckMleEssentialROC
+
+sum(Hart2015GBM_lib1MageckRraEssential$neg.fdr < 0.05)
+sum(Hart2015GBM_lib1MageckRraEssential$neg.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Hart2015GBM_lib1MageckRraEssential$neg.fdr < 0.1)
+sum(Hart2015GBM_lib1MageckRraEssential$neg.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Hart2015GBM_lib1MageckRraEssentialROC = roc(EssentialGenes$essential, Hart2015GBM_lib1MageckRraEssential$neg.fdr)
+Hart2015GBM_lib1MageckRraEssentialROC
+
+MannWhitneyFdrs = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+MannWhitneyFdrs = MannWhitneyFdrs[match(EssentialGenes$gene, names(MannWhitneyFdrs))]
+sum(MannWhitneyFdrs < 0.05)
+sum(MannWhitneyFdrs < 0.05 & EssentialGenes$essential == 1)
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+MannWhitneyFdrsROC = roc(EssentialGenes$essential, MannWhitneyFdrs)
+MannWhitneyFdrsROC
+
+cols = RColorBrewer::brewer.pal(6, "Set1")
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015GBM_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015GBM_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015GBM_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015GBM_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015GBM_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015GBM_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+pdf('Hart2015GBM_lib1RocCurves.pdf')
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Hart2015GBM_lib1MageckMleEssentialROC, col = cols[3], lwd = 2)
+lines(Hart2015GBM_lib1MageckRraEssentialROC, col = cols[4], lwd = 2)
+lines(Hart2015GBM_lib1CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Hart2015GBM_lib1MageckMleEssentialROC$auc, digits = 2), ")"), paste0("MAGeCK RRA (AUC = ", round(Hart2015GBM_lib1MageckRraEssentialROC$auc, digits = 2), ")"), paste0("CRISPhieRmix (AUC = ", round(Hart2015GBM_lib1CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 4, 2)])
+dev.off()
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+Hart2015GBM_lib1CRISPhieRmixScoresEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015GBM_lib1CRISPhieRmixScoresEssential$FDR, EssentialGenes$essential))
+MannWhitneyFdrsFdrCurve = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs, EssentialGenes$essential))
+Hart2015GBM_lib1MageckMleEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015GBM_lib1MageckMleEssential$condition.fdr, EssentialGenes$essential))
+Hart2015GBM_lib1MageckRraEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Hart2015GBM_lib1MageckRraEssential$neg.fdr, EssentialGenes$essential))
+
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015GBM_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015GBM_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015GBM_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015GBM_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015GBM_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015GBM_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015GBM_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015GBM_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015GBM_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+pdf('Hart2015GBM_lib1EmpiricalVsEstimatedFdr.pdf')
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Hart2015GBM_lib1MageckMleEssentialFdrCurve)]), c(0, Hart2015GBM_lib1MageckMleEssentialFdrCurve[!is.na(Hart2015GBM_lib1MageckMleEssentialFdrCurve)]), col = cols [3], lwd = 2)
+lines(c(0, s[!is.na(Hart2015GBM_lib1MageckRraEssentialFdrCurve)]), c(0, Hart2015GBM_lib1MageckRraEssentialFdrCurve[!is.na(Hart2015GBM_lib1MageckRraEssentialFdrCurve)]), col = cols [4], lwd = 2)
+lines(c(0, s[!is.na(Hart2015GBM_lib1CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Hart2015GBM_lib1CRISPhieRmixScoresEssentialFdrCurve[!is.na(Hart2015GBM_lib1CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2], lwd = 2)
+legend("bottomright", legend = c("MAGeCK MLE", "MAGeCK RRA", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 4, 1, 2)], lty = 1)
+abline(0, 1)
+dev.off()
+```
+

@@ -1,0 +1,12 @@
+---
+title: "Analysis of Chong et al 2018"
+author: "Timothy Daley"
+date: "12/3/2018"
+output: html_document
+---
+
+```{bash eval = FALSE}
+mageck mle -k PooledMonoclonalAntibodyCounts.txt -d design_matrix.txt --control-sgrna nontargeting.txt --output-prefix PooledMonoclonalAntibodyMagecKMle
+```
+
+

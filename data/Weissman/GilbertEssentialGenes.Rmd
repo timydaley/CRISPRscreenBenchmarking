@@ -1,0 +1,606 @@
+---
+title: "Gilbert essential genes"
+author: "Timothy Daley"
+date: "2/13/2018"
+output: html_document
+---
+
+(Gilbert et al. 2014)[https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4253859/] treated K562 cells and compared ricin treated to untreated cells to find genes that contribute to resistance and susceptibility of ricin.  They also sequenced the day 0 population.  In theory, if we compare the untreated population to the initial population then essential genes should be depleted among the guides.  We will use this data as a baseline to compare methods, as essential genes are a well studied class of genes.
+
+```{r }
+cols = RColorBrewer::brewer.pal(8, "Set1")
+
+WeissmanCRISPRiRicinTreatment = read.table(file = "~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatment.txt", header = TRUE)
+head(WeissmanCRISPRiRicinTreatment)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts = WeissmanCRISPRiRicinTreatment[ ,c("sequence", "gene", "T0JEV", "T0MH", "untreatedJEV", "untreatedMH")]
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts[-which(rowSums(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts[ ,3:6]) < 50), ]
+write.table(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts, file = "~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts.txt", quote = FALSE, sep = "\t", col.names = TRUE, row.names = FALSE)
+write.table(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts$sequence[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts$gene == "negative_control")], file = "~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NegCtrl.txt", quote = FALSE, sep = "\n", col.names = TRUE, row.names = FALSE)
+library(DESeq2)
+counts = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts[, 3:6]
+coldata = data.frame(condition = c(0, 0, 1, 1), rep = c(0, 1, 0, 1))
+rownames(coldata) = colnames(counts)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, 
+                                                                                   colData = coldata, 
+                                                                                   design = ~ condition)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0DESeq = DESeq2::DESeq(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0DESeq)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0DESeq = DESeq2::results(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0DESeq)
+log2fc = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0DESeq$log2FoldChange
+b = seq(from = min(log2fc) - 0.1, to = max(log2fc) + 0.1, length = 81)
+negCtrl = log2fc[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts$gene == "negative_control")]
+log2fc = log2fc[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts$gene != "negative_control")]
+geneIds = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts$gene != "negative_control")]
+geneIds = factor(geneIds, levels = unique(geneIds))
+hist(negCtrl, breaks = b, probability = TRUE, col = rgb(1, 0, 0, 0.7), xlab = "log2fc", main = "negative control vs gene targetting guides")
+hist(log2fc, breaks = b, probability = TRUE, add = TRUE, col = rgb(0, 1, 0, 0.7))
+legend("topleft", legend = c("negative control", "gene targetting"), lwd = 0, lty = 0, pch = 16, col = c(rgb(1, 0, 0, 0.7), rgb(0, 1, 0, 0.7)))
+min(negCtrl)
+min(log2fc)
+```
+
+There is a clear enrichment of depleted guides compared to the negative control guides.  Let's apply and take a look at the results of different algorithms.
+
+```{r }
+design_matrix = data.frame(Samples = rownames(coldata), baseline = c(1, 1, 1, 1), condition = coldata$condition)
+write.table(design_matrix, file = "~/sgRNA/sgRNA2Groups/data/Weissman/design_matrix.txt", quote = FALSE, sep = "\t", col.names = TRUE, row.names = FALSE)
+system("mageck mle -k ~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts.txt -d ~/sgRNA/sgRNA2Groups/data/Weissman/design_matrix.txt --output-prefix ~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle --control-sgrna ~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NegCtrl.txt")
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle = read.table(file = "~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.gene_summary.txt", header = TRUE)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle)
+```
+```{r }
+#hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.wald.p.value, breaks = 80, col = "grey")
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.p.value, breaks = 80, col = "grey")
+```
+
+```{r }
+system("mageck test -k ~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Counts.txt  -t T0JEV,T0MH --output-prefix ~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckRra --control-sgrna ~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NegCtrl.txt")
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckRra = read.table(file = "~/sgRNA/sgRNA2Groups/data/Weissman/WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckRra.gene_summary.txt", header = TRUE)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckRra)
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckRra$neg.p.value, breaks = 80, col = "grey")
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckRra$pos.p.value, breaks = 80, col = "grey")
+```
+
+```{r }
+library(CRISPhieRmix)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix = CRISPhieRmix(x = log2fc, geneIds = geneIds, negCtrl = negCtrl, mu = -6, sigma = 2, pq = 0.05, VERBOSE = TRUE, PLOT = TRUE, nMesh = 100)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores = data.frame(gene = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix$genes, locfdr = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix$locfdr)
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr, breaks = 80, col = "grey")
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores[order(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr, decreasing = FALSE), ], 10)
+```
+
+
+```{r }
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Normalmix = CRISPhieRmix(x = log2fc, geneIds = geneIds, mu = -6, sigma = 2, pq = 0.05, VERBOSE = TRUE, PLOT = TRUE, nMesh = 100)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores = data.frame(gene = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Normalmix$genes, locfdr = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Normalmix$locfdr)
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr, breaks = 80, col = "grey")
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores[order(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr, decreasing = FALSE), ], 10)
+```
+
+```{r }
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc[which(geneIds == g)], negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+hist(MannWhitneyPvals, breaks = 40, col = "grey")
+
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+head(sort(MannWhitneyFdrs, decreasing = FALSE), 20)
+
+top3MannWhitneyPval <- function(x, negCtrl){
+  top3x = head(sort(x, decreasing = FALSE), 3)
+  topNegCtrl = head(sort(negCtrl, decreasing = FALSE), round(3*length(negCtrl)/length(x)))
+  return(wilcox.test(top3x, topNegCtrl, paired = FALSE)$p.value)
+}
+top3MannWhitneyPvals = sapply(unique(geneIds), function(g) return(top3MannWhitneyPval(x = log2fc[which(geneIds == g)], negCtrl = negCtrl)))
+names(top3MannWhitneyPvals) = unique(geneIds)
+top3MannWhitneyFdrs = p.adjust(top3MannWhitneyPvals, method = "BH")
+head(sort(top3MannWhitneyFdrs, decreasing = FALSE), 20)
+```
+
+We can  use the essential genes from [Evers et al. 2016](https://www.ncbi.nlm.nih.gov/pubmed/27111720) to estimate proxy measures for false positive rates and false negative rates.
+
+```{r }
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores)
+EssentialGenes = read.table(file = "~/sgRNA/sgRNA2Groups/data/Evers2016/EssentialGenes.txt", header = TRUE)
+head(EssentialGenes)
+dim(EssentialGenes)
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores[match(EssentialGenes$gene, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$gene), ]
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential[-which(is.na(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene)), ]
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential = data.frame(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential, essential = EssentialGenes$essential[which(EssentialGenes$gene %in% WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene)])
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)
+library(ggjoy)
+library(ggplot2)
+b = seq(from = 0, to = 1, length = 41)
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$essential == 0)], breaks = b,  col = rgb(1, 0, 0, 0.7), main = "essential vs nonessential genes", xlab = "locfdr", ylim = c(0, 40))
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$essential == 1)], breaks = b,  col = rgb(0, 1, 0, 0.7), add = TRUE)
+estimatedFdr = sapply(1:dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)[1], function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$locfdr[i])]))
+
+1 - sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$essential[which(estimatedFdr < 0.2)])/sum(estimatedFdr < 0.2)
+
+library(pROC)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc = roc(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$locfdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc
+```
+
+
+
+```{r }
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle[match(EssentialGenes$gene, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$Gene), ]
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential[-which(is.na(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene)), ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential = data.frame(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential, essential = EssentialGenes$essential[which(EssentialGenes$gene %in% WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene)])
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.p.value[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential == 0)], breaks = b,  col = rgb(1, 0, 0, 0.7), main = "essential vs nonessential genes", xlab = "permutation p-value", ylim = c(0, 40))
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.p.value[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential == 1)], breaks = b, col = rgb(0, 1, 0, 0.7), add = TRUE)
+
+#hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.p.value[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential == 0)], breaks = b, col = rgb(1, 0, 0, 0.7), main = "essential vs nonessential genes", xlab = "wald p-value", ylim = c(0, 50))
+#hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.p.value[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential == 1)], breaks = b, col = rgb(0, 1, 0, 0.7), add = TRUE)
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc = roc(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc
+
+1 - sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2)])/sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2)
+
+#WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.wald.roc = roc(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr)
+#WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.wald.roc
+
+#1 - sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.2)])/sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.2)
+```
+
+
+The performance of all is similar.  They all pretty much correctly identify the essential genes.  To get better estimates we'll take the list of essential genes directly from [Hart et al 2015](http://msb.embopress.org/content/10/7/733).
+
+```{r }
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+length(ConstitutiveCoreEssentialGenes)
+head(ConstitutiveCoreEssentialGenes)
+tail(ConstitutiveCoreEssentialGenes)
+
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(genes = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+dim(EssentialGenes)
+head(EssentialGenes)
+tail(EssentialGenes)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix$genes %in% ConstitutiveCoreEssentialGenes)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix$genes %in% NonEssentialGenes)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores[match(EssentialGenes$genes, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$gene), ]
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential[-which(is.na(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene)), ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)
+EssentialGenes = EssentialGenes[which(EssentialGenes$genes %in% WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene), ]
+dim(EssentialGenes)
+head(EssentialGenes)
+
+library(pROC)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$locfdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc
+
+estimatedFdr = sapply(1:dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)[1], function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$locfdr[i])]))
+AllEstimatedFdr = sapply(1:length(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr), function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[i])]))
+length(estimatedFdr)
+head(estimatedFdr)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)
+1 - sum(EssentialGenes$essential[which(estimatedFdr < 0.1)])/sum(estimatedFdr < 0.1)
+sum(estimatedFdr < 0.1)
+sum(EssentialGenes$essential[which(estimatedFdr < 0.1)])
+1 - sum(EssentialGenes$essential[which(estimatedFdr < 0.2)])/sum(estimatedFdr < 0.2)
+sum(estimatedFdr < 0.2)
+sum(EssentialGenes$essential[which(estimatedFdr < 0.2)])
+
+sum(AllEstimatedFdr < 0.1)
+sum(AllEstimatedFdr < 0.2)
+
+max(estimatedFdr[which(EssentialGenes$essential == 1)])
+
+hist(estimatedFdr, breaks = 100, col = "grey")
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+
+f = sapply(s, function(t) fdr.curve(t, estimatedFdr, EssentialGenes$essential))
+plot(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "CRISPhieRmix estimated FDR", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = "dodgerblue")
+abline(0, 1, lty = 2)
+
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle[match(EssentialGenes$genes, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$Gene), ]
+#WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential[-which(is.na(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene)), ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc
+
+1 - sum(EssentialGenes$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)])/sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.fdr < 0.1)
+sum(EssentialGenes$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)])
+
+1 - sum(EssentialGenes$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2)])/sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2)
+sum(EssentialGenes$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2)])
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.fdr < 0.2)
+
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr, breaks = 100, col = "grey")
+
+
+f = sapply(s, function(t) fdr.curve(t, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr, EssentialGenes$essential))
+plot(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "MAGeCK permutation FDR", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = "deeppink")
+abline(0, 1, lty = 2)
+
+max(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr[which(EssentialGenes$essential == 1)])
+
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.wald.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.wald.roc
+
+1 - sum(EssentialGenes$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.1)])/sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.1)
+
+1 - sum(EssentialGenes$essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.2)])/sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.2)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.2)
+
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr, breaks = 100, col = "grey")
+
+f = sapply(s, function(t) fdr.curve(t, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr, EssentialGenes$essential))
+plot(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "MAGeCK Wald FDR", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = "darkviolet")
+abline(0, 1, lty = 2)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Normalmix$genes %in% ConstitutiveCoreEssentialGenes)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Normalmix$genes %in% NonEssentialGenes)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores[match(EssentialGenes$genes, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$gene), ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential)
+
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$locfdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential.roc
+
+NormalEstimatedFdr = sapply(1:dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential)[1], function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$locfdr[i])]))
+
+NormalAllEstimatedFdr = sapply(1:dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores)[1], function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr[i])]))
+
+sum(NormalAllEstimatedFdr < 0.1)
+1 - sum(EssentialGenes$essential[which(NormalEstimatedFdr < 0.1)])/sum(NormalEstimatedFdr < 0.1)
+sum(EssentialGenes$essential[which(NormalEstimatedFdr < 0.1)])
+sum(1 - EssentialGenes$essential[which(NormalEstimatedFdr < 0.1)])
+sum(NormalEstimatedFdr < 0.1)
+
+sum(NormalAllEstimatedFdr < 0.2)
+1 - sum(EssentialGenes$essential[which(NormalEstimatedFdr < 0.2)])/sum(NormalEstimatedFdr < 0.2)
+sum(EssentialGenes$essential[which(NormalEstimatedFdr < 0.2)])
+sum(1 - EssentialGenes$essential[which(NormalEstimatedFdr < 0.2)])
+sum(NormalEstimatedFdr < 0.2)
+
+hist(estimatedFdr, breaks = 100, col = "grey")
+
+f = sapply(s, function(t) fdr.curve(t, NormalEstimatedFdr, EssentialGenes$essential))
+plot(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Normal hierarchical mixture estimated FDR", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = "darkblue")
+abline(0, 1, lty = 2)
+
+dim(EssentialGenes)
+sum(EssentialGenes$essential)
+
+MannWhitneyFdrs.essential = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+hist(MannWhitneyFdrs.essential, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs.essential < 0.1)
+sum(MannWhitneyFdrs.essential < 0.1 & EssentialGenes$essential == 1)
+
+sum(MannWhitneyFdrs < 0.2)
+sum(MannWhitneyFdrs.essential < 0.2)
+sum(MannWhitneyFdrs.essential < 0.2 & EssentialGenes$essential == 1)
+
+MannWhitneyFdrs.essential.roc = roc(EssentialGenes$essential, MannWhitneyFdrs.essential)
+MannWhitneyFdrs.essential.roc
+
+length(intersect(names(MannWhitneyFdrs.essential)[which(MannWhitneyFdrs.essential < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)]))
+
+top3MannWhitneyFdrs.essential = top3MannWhitneyFdrs[which(names(top3MannWhitneyFdrs) %in% EssentialGenes$gene)]
+
+hist(top3MannWhitneyFdrs.essential, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+sum(top3MannWhitneyFdrs < 0.1)
+sum(top3MannWhitneyFdrs.essential < 0.1)
+sum(top3MannWhitneyFdrs.essential < 0.1 & EssentialGenes$essential == 1)
+
+sum(top3MannWhitneyFdrs < 0.2)
+sum(top3MannWhitneyFdrs.essential < 0.2)
+sum(top3MannWhitneyFdrs.essential < 0.2 & EssentialGenes$essential == 1)
+
+top3MannWhitneyFdrs.essential.roc = roc(EssentialGenes$essential, top3MannWhitneyFdrs.essential)
+top3MannWhitneyFdrs.essential.roc
+
+length(intersect(names(top3MannWhitneyFdrs.essential)[which(top3MannWhitneyFdrs.essential < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)]))
+
+length(intersect(names(MannWhitneyFdrs.essential)[which(MannWhitneyFdrs.essential < 0.1)], intersect(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)])))
+
+plot(MannWhitneyFdrs.essential.roc, col = cols[1], lwd = 2, lty = 7, xlim = c(0, 1), ylim = c(0, 1), main = "ROC curves")
+lines(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc, col = cols[2], lwd = 2)
+#lines(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential.roc, col = cols[3], lwd = 2, lty = 5)
+lines(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc, col = cols[3], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrs.essential.roc$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc$auc, digits = 2), ")"),  paste0("CRISPhieRmix (AUC = ", round(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 2)])
+
+pdf('CRISPRiUntreated2day0RocCurves.pdf')
+plot(MannWhitneyFdrs.essential.roc, col = cols[1], lwd = 2, lty = 7, xlim = c(0, 1), ylim = c(0, 1), main = "ROC curves")
+lines(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc, col = cols[2], lwd = 2)
+#lines(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential.roc, col = cols[3], lwd = 2, lty = 5)
+lines(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc, col = cols[3], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrs.essential.roc$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc$auc, digits = 2), ")"),  paste0("CRISPhieRmix (AUC = ", round(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 2)])
+dev.off()
+
+f = sapply(s, function(t) fdr.curve(t, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr, EssentialGenes$essential))
+plot(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "empirical vs estimated FDR", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[3])
+f = sapply(s, function(t) fdr.curve(t, estimatedFdr, EssentialGenes$essential))
+lines(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), lwd = 2, col = cols[2])
+f = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs.essential, EssentialGenes$essential))
+lines(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), lwd = 2, col = cols[1])
+abline(0, 1, lty = 2)
+legend("bottomright", legend = c("Mann-Whitney", "MAGeCK MLE", "CRISPhieRmix"), col = cols[c(1, 3, 2)], lwd = 2)
+
+pdf('CRISPRiUntreated2day0EmpiricalVsEstimatedFdr.pdf')
+f = sapply(s, function(t) fdr.curve(t, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr, EssentialGenes$essential))
+plot(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "empirical vs estimated FDR", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[3])
+f = sapply(s, function(t) fdr.curve(t, estimatedFdr, EssentialGenes$essential))
+lines(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), lwd = 2, col = cols[2])
+f = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs.essential, EssentialGenes$essential))
+lines(c(0, s[!is.na(f)]), c(0, f[!is.na(f)]), lwd = 2, col = cols[1])
+abline(0, 1, lty = 2)
+legend("bottomright", legend = c("Mann-Whitney", "MAGeCK MLE", "CRISPhieRmix"), col = cols[c(1, 3, 2)], lwd = 2)
+dev.off()
+```
+
+
+```{r }
+b = seq(from = min(log2fc) - 0.1, to = max(log2fc) + 0.1, length = 201)
+hist(log2fc, breaks = 80, probability = TRUE, main = "mixture fit to observations")
+mixFit = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix$mixFit
+lines(b, mixFit$pq*dnorm(b, mixFit$mu, mixFit$sigma), lwd = 2, col = "darkgreen")
+lines(b, (1 - mixFit$pq)*sn::dst(b, dp = mixFit$skewtFit$dp), col = "red", lwd  = 2)
+lines(b, mixFit$pq*dnorm(b, mixFit$mu, mixFit$sigma) + (1 - mixFit$pq)*sn::dst(b, dp = mixFit$skewtFit$dp), col = "darkviolet", lty = 2, lwd = 2)
+pdf('CRISPRiUntreated2day0CRISPhieRmixFit.pdf')
+b = seq(from = min(log2fc) - 0.1, to = max(log2fc) + 0.1, length = 201)
+hist(log2fc, breaks = 80, probability = TRUE, main = "mixture fit to observations")
+mixFit = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix$mixFit
+lines(b, mixFit$pq*dnorm(b, mixFit$mu, mixFit$sigma), lwd = 2, col = "darkgreen")
+lines(b, (1 - mixFit$pq)*sn::dst(b, dp = mixFit$skewtFit$dp), col = "red", lwd  = 2)
+lines(b, mixFit$pq*dnorm(b, mixFit$mu, mixFit$sigma) + (1 - mixFit$pq)*sn::dst(b, dp = mixFit$skewtFit$dp), col = "darkviolet", lty = 2, lwd = 2)
+legend("topleft", legend = c("null fit", "dropout fit", "combined fit"), lty = c(1, 1, 2), col = c("darkgreen", "red", "darkviolet"))
+dev.off()
+```
+
+
+```{r}
+mageckGenes = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1 & EssentialGenes$essential == 1)]
+length(mageckGenes)
+CRISPhieRmixGenes = EssentialGenes$gene[which(estimatedFdr < 0.1 & EssentialGenes$essential == 1)]
+length(CRISPhieRmixGenes)
+length(intersect(mageckGenes, CRISPhieRmixGenes))
+GenesInCommon = intersect(mageckGenes, CRISPhieRmixGenes)
+b = seq(from = min(log2fc) - 0.1, to = max(log2fc) + 0.1, length = 81)
+hist(log2fc[which(geneIds %in% GenesInCommon)], breaks = b, col = "grey", probability = TRUE)
+
+pdf('GenesInCommonHist.pdf')
+hist(log2fc[which(geneIds %in% GenesInCommon)], breaks = b, col = "grey", probability = TRUE)
+dev.off()
+
+GenesCRISPhieRspecific = setdiff(CRISPhieRmixGenes, GenesInCommon)
+length(GenesCRISPhieRspecific)
+hist(log2fc[which(geneIds %in% GenesCRISPhieRspecific)], breaks = b, col = "grey", probability = TRUE)
+
+pdf('GenesCRISPhieRspecificHist.pdf')
+hist(log2fc[which(geneIds %in% GenesCRISPhieRspecific)], breaks = b, col = "grey", probability = TRUE)
+dev.off()
+
+hist(negCtrl, breaks = b, probability = TRUE, col = rgb(1, 0, 0, 0.6), xlab = "log2fc")
+hist(log2fc[which(geneIds == GenesInCommon[1])], breaks = b, probability = TRUE, col = rgb(0, 1, 0, 0.8), add = TRUE)
+hist(log2fc[which(geneIds == GenesCRISPhieRspecific[1])], breaks = b, probability = TRUE, col = rgb(0, 0, 1, 0.8), add = TRUE)
+legend("topleft", legend = c("negative control", GenesInCommon[1], GenesCRISPhieRspecific[1]), pch = 15, col = c(rgb(1, 0, 0, 0.6), rgb(0, 1, 0, 0.8), rgb(0, 0, 1, 0.8)))
+
+y = data.frame(gene = c(rep("negCtrl", times = length(negCtrl)), rep(toString(GenesInCommon[1]), times = length(which(geneIds == GenesInCommon[1]))), rep(toString(GenesCRISPhieRspecific[1]), times = length(which(geneIds == GenesCRISPhieRspecific[1])))), log2fc = c(negCtrl, log2fc[which(geneIds == GenesInCommon[1])], log2fc[which(geneIds == GenesCRISPhieRspecific[1])]))
+library(ggplot2)
+library(ggjoy)
+ggplot(y, aes(x = log2fc, y = gene)) + geom_joy(scale = 0.8) + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) 
+
+pdf('GenesCRISPhieRspecificHistExampleGenes.pdf')
+ggplot(y, aes(x = log2fc, y = gene)) + geom_joy(scale = 0.8) + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) 
+dev.off()
+
+y = data.frame(gene = c(rep("negCtrl", times = length(negCtrl)), rep("Genes In Common", times = length(which(geneIds %in% GenesInCommon))), rep("CRISPhieRspecific", times = length(which(geneIds %in% GenesCRISPhieRspecific)))), log2fc = c(negCtrl, log2fc[which(geneIds %in% GenesInCommon)], log2fc[which(geneIds %in% GenesCRISPhieRspecific)]))
+ggplot(y, aes(x = log2fc, y = gene)) + geom_joy(scale = 0.9) + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) 
+
+pdf('GenesInCommonVsCRISPhieRspecificJoyplot.pdf')
+ggplot(y, aes(x = log2fc, y = gene)) + geom_joy(scale = 0.9) + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) 
+dev.off()
+
+
+```
+
+```{r }
+# 2017 essential genes
+EssentialGenes = read.table("~/Downloads/TableS2.txt")
+EssentialGenes = EssentialGenes[,1]
+length(EssentialGenes)
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+length(NonEssentialGenes)
+
+EssentialGenes = data.frame(gene = c(sapply(EssentialGenes, toString), sapply(NonEssentialGenes, toString)), essential = c(rep(1, times = length(EssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+dim(EssentialGenes)
+head(EssentialGenes)
+tail(EssentialGenes)
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix.estimatedFdr = sapply(1:length(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr), function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[i])]) )
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores = data.frame(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores, estimatedFdr = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix.estimatedFdr)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmix$genes %in% EssentialGenes$gene)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores[match(EssentialGenes$gene, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$gene), ]
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential[-which(is.na(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene)), ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential)
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene), ]
+dim(EssentialGenes)
+head(EssentialGenes)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)
+length(which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1 & EssentialGenes$essential == 1))
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$estimatedFdr < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.2)
+length(which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.2 & EssentialGenes$essential == 1))
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$locfdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential.roc
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle[match(EssentialGenes$gene, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$Gene), ]
+#WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential[-which(is.na(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene)), ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.fdr < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.fdr < 0.2)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.2 & EssentialGenes$essential == 1)
+
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.perm.roc
+
+#sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.1)
+#sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.wald.fdr < 0.1)
+#sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.1 & EssentialGenes$essential == 1)
+#sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.2)
+#sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.wald.fdr < 0.2)
+#sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr < 0.2 & EssentialGenes$essential == 1)
+#hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+#WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.wald.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.wald.fdr)
+#WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential.wald.roc
+
+length(intersect(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)]))
+
+MannWhitneyFdrs.essential = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+hist(MannWhitneyFdrs.essential, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs.essential < 0.1)
+sum(MannWhitneyFdrs.essential < 0.1 & EssentialGenes$essential == 1)
+
+sum(MannWhitneyFdrs < 0.2)
+sum(MannWhitneyFdrs.essential < 0.2)
+sum(MannWhitneyFdrs.essential < 0.2 & EssentialGenes$essential == 1)
+
+MannWhitneyFdrs.essential.roc = roc(EssentialGenes$essential, MannWhitneyFdrs.essential)
+MannWhitneyFdrs.essential.roc
+
+length(intersect(names(MannWhitneyFdrs.essential)[which(MannWhitneyFdrs.essential < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)]))
+
+top3MannWhitneyFdrs.essential = top3MannWhitneyFdrs[which(names(top3MannWhitneyFdrs) %in% EssentialGenes$gene)]
+
+hist(top3MannWhitneyFdrs.essential, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+sum(top3MannWhitneyFdrs < 0.1)
+sum(top3MannWhitneyFdrs.essential < 0.1)
+sum(top3MannWhitneyFdrs.essential < 0.1 & EssentialGenes$essential == 1)
+
+sum(top3MannWhitneyFdrs < 0.2)
+sum(top3MannWhitneyFdrs.essential < 0.2)
+sum(top3MannWhitneyFdrs.essential < 0.2 & EssentialGenes$essential == 1)
+
+top3MannWhitneyFdrs.essential.roc = roc(EssentialGenes$essential, top3MannWhitneyFdrs.essential)
+top3MannWhitneyFdrs.essential.roc
+
+length(intersect(names(top3MannWhitneyFdrs.essential)[which(top3MannWhitneyFdrs.essential < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)]))
+
+length(intersect(names(MannWhitneyFdrs.essential)[which(MannWhitneyFdrs.essential < 0.1)], intersect(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)])))
+```
+
+```{r }
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores = data.frame(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores, estimatedFdr = sapply(1:dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores)[1], function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$locfdr[i])])) )
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0Normalmix$genes %in% EssentialGenes$gene)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores[match(EssentialGenes$gene, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores$gene), ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential)
+
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$estimatedFdr < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$estimatedFdr < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$estimatedFdr < 0.2)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$estimatedFdr < 0.2)
+hist(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$estimatedFdr, breaks = seq(from = 0, to = 1, length = 101), col = "grey")
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential.roc = roc(EssentialGenes$essential, WeissmanCRISPRiRicinTreatmentUntreatedVsDay0NormalmixScores.essential$locfdr)
+
+```
+
+```{r eval=FALSE}
+mageckGenes = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$condition.fdr < 0.1)]
+length(mageckGenes)
+# CRISPhieRmixGenes = EssentialGenes$gene[which(estimatedFdr < 0.1 & EssentialGenes$essential == 1)]
+CRISPhieRmixGenes = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$estimatedFdr < 0.1)]
+length(CRISPhieRmixGenes)
+length(intersect(mageckGenes, CRISPhieRmixGenes))
+GenesInCommon = intersect(mageckGenes, CRISPhieRmixGenes)
+b = seq(from = min(log2fc) - 0.1, to = max(log2fc) + 0.1, length = 81)
+hist(log2fc[which(geneIds %in% GenesInCommon)], breaks = b, col = "grey", probability = TRUE)
+GenesCRISPhieRspecific = setdiff(CRISPhieRmixGenes, GenesInCommon)
+length(GenesCRISPhieRspecific)
+hist(log2fc[which(geneIds %in% GenesCRISPhieRspecific)], breaks = b, col = "grey", probability = TRUE)
+
+hist(negCtrl, breaks = b, probability = TRUE, col = rgb(1, 0, 0, 0.6))
+hist(log2fc[which(geneIds == GenesInCommon[1])], breaks = b, probability = TRUE, add = TRUE, col = rgb(0, 1, 0, 0.8))
+legend("topright", legend = c("negCtrl", GenesInCommon[1]), col = c(rgb(1, 0, 0, 0.6), rgb(0, 0, 1, 0.8)), pch = 15, lty = 0, lwd = 0)
+hist(log2fc[which(geneIds == GenesCRISPhieRspecific[1])], breaks = b, probability = TRUE, add = TRUE, col = rgb(0, 0, 1, 0.8))
+legend("topright", legend = c("negCtrl", GenesInCommon[1], GenesCRISPhieRspecific[1]), col = c(rgb(1, 0, 0, 0.6), rgb(0, 1, 1, 0.8), rgb(0, 0, 1, 0.8)), pch = 15, lty = 0, lwd = 0)
+
+hist(negCtrl, breaks = b, probability = TRUE, col = rgb(1, 0, 0, 0.6))
+hist(log2fc[which(geneIds == GenesInCommon[1])], breaks = b, probability = TRUE, add = TRUE, col = rgb(0, 1, 0, 0.8))
+legend("topright", legend = c("negCtrl", GenesInCommon[2]), col = c(rgb(1, 0, 0, 0.6), rgb(0, 0, 1, 0.8)), pch = 15, lty = 0, lwd = 0)
+hist(log2fc[which(geneIds == GenesCRISPhieRspecific[2])], breaks = b, probability = TRUE, add = TRUE, col = rgb(0, 0, 1, 0.8))
+legend("topright", legend = c("negCtrl", GenesInCommon[2], GenesCRISPhieRspecific[2]), col = c(rgb(1, 0, 0, 0.6), rgb(0, 1, 1, 0.8), rgb(0, 0, 1, 0.8)), pch = 15, lty = 0, lwd = 0)
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle.essential$Gene == GenesCRISPhieRspecific[2]), ]
+
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores.essential$gene == GenesCRISPhieRspecific[2]), ]
+```
+
+Intersection of all genes
+
+```{r}
+estimatedFdrAll = sapply(1:length(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr), function(i) mean(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr <= WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$locfdr[i])]))
+names(estimatedFdrAll) = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0CRISPhieRmixScores$gene
+length(estimatedFdrAll)
+head(estimatedFdrAll)
+WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle = WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle[match(names(estimatedFdrAll), WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$Gene),  ]
+dim(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle)
+head(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle)
+sum(estimatedFdrAll < 0.1)
+sum(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.fdr < 0.1)
+length(intersect(names(estimatedFdrAll)[which(estimatedFdrAll < 0.1)], WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$Gene[which(WeissmanCRISPRiRicinTreatmentUntreatedVsDay0MageckMle$condition.fdr < 0.1)]))
+```

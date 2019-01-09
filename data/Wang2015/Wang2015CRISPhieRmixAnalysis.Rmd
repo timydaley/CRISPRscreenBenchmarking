@@ -1,0 +1,46 @@
+---
+title: "Testing CRISPhieRmix on a CRISPRko screen for essential genes"
+author: "Timothy Daley"
+date: "7/23/2018"
+output: html_document
+---
+
+In this document we will compare CRISPhieRmix to competing methods for defining gene essentiality, using data from [Wang et al, 2015](http://science.sciencemag.org/content/350/6264/1096.full).  
+
+```{r cache=TRUE}
+Wang2015counts = read.table(file = "aac7041_SM_Table_S2.txt", sep = "\t", header = TRUE)
+Wang2015counts = Wang2015counts[-which(rowSums(Wang2015counts[ ,-c(1)]) == 0), ]
+which.negCtrl = which(startsWith(sapply(Wang2015counts$sgRNA, toString), "CTRL"))
+geneIds = sapply(Wang2015counts$sgRNA[-which.negCtrl], function(g) unlist(strsplit(toString(g), split = "_"))[1])
+geneIds = sapply(geneIds, function(g) substring(g, first = 3))
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+counts = Wang2015counts[ , -c(1)]
+colData = data.frame(cellType = sapply(colnames(counts), function(x) unlist(strsplit(toString(x), split = ".", fixed = TRUE))[1]), condition = factor(rep(c(0, 1), times = 5)))
+rownames(colData) = colnames(counts)
+Wang2015DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~ condition)
+Wang2015DESeq = DESeq2::DESeq(Wang2015DESeq)
+Wang2015DESeq = DESeq2::results(Wang2015DESeq)
+log2fc = Wang2015DESeq$log2FoldChange
+log2fc.negCtrl = log2fc[which.negCtrl]
+log2fc.geneTargeting = log2fc[-which.negCtrl]
+library(ggplot2)
+ggplot(data.frame(log2fc = log2fc, category = c(rep("negative control", times = length(which.negCtrl)), rep("gene targeting", times = length(log2fc.geneTargeting)))), aes(x = log2fc, colour = category)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+# problem here, there is a general gene effect killing cells.  Shift both distributions to have median at zero
+log2fc.negCtrl = log2fc.negCtrl - median(log2fc.negCtrl)
+log2fc.geneTargeting = log2fc.geneTargeting - median(log2fc.geneTargeting)
+
+library(CRISPhieRmix)
+Wang2015CRISPhieRmix = CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -4, sigma = 2, PLOT = TRUE) 
+Wang2015CRISPhieRmix.geneScores = data.frame(gene = Wang2015CRISPhieRmix$genes, score = Wang2015CRISPhieRmix$locfdr, FDR = sapply(Wang2015CRISPhieRmix$locfdr, function(x) mean(Wang2015CRISPhieRmix$locfdr[which(Wang2015CRISPhieRmix$locfdr <= x)])))
+
+
+write.table(data.frame(Spacer = Wang2015counts$sgRNA[-which.negCtrl], Gene = geneIds, Wang2015counts[-which.negCtrl, -c(1)]), file = "Wang2015GeneCounts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(data.frame(Spacer = Wang2015counts$sgRNA[which.negCtrl], Gene = rep("CTRL", times = length(which.negCtrl)), Wang2015counts[which.negCtrl, -c(1)]), file = "Wang2015NegCtrlCounts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+design.matrix = data.frame(Samples = colnames(counts), baseline = rep(1, times = dim(counts)[2]), condition = colData$condition, KBM7 = as.numeric(grepl("KBM7", colnames(counts))), K562 = as.numeric(grepl("K562", colnames(counts))), Jiyoye = as.numeric(grepl("Jiyoye", colnames(counts))), Raji = as.numeric(grepl("Raji", colnames(counts))))
+write.table(data.frame(Spacer = Wang2015counts$sgRNA, Gene = c(rep("CTRL", times = length(which.negCtrl)), geneIds), Wang2015counts[, -c(1)]),  file = "Wang2015Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(design.matrix, file = "design_matrix.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+system("mageck mle -k Wang2015Counts.txt -d design_matrix.txt --output-prefix Wang2015MageckMle --control-sgrna CTRL")
+```

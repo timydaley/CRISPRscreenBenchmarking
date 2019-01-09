@@ -1,0 +1,129 @@
+---
+title: "Testing CRISPhieRmix on a CRISPRko screen for essential genes"
+author: "Timothy Daley"
+date: "7/23/2018"
+output: html_document
+---
+
+In this document we will compare CRISPhieRmix to competing methods for defining gene essentiality, using data from [Wang et al, 2014](http://science.sciencemag.org/content/343/6166/80.full).  
+
+```{r cache=TRUE}
+Wang2014counts = read.table(file = "Wang2014sgRNAcounts.txt", sep = "\t", header = TRUE)
+head(sort(table(Wang2014counts$Gene), decreasing = TRUE))
+dim(Wang2014counts)
+Wang2014counts = Wang2014counts[-which(rowSums(Wang2014counts[ ,-c(1, 2)]) == 0), ]
+Wang2014counts = Wang2014counts[which(!is.na(Wang2014counts$Gene)), ]
+which.negCtrl = which(Wang2014counts$Gene == "negative_control")
+geneIds = Wang2014counts$Gene[-which.negCtrl]
+geneIds = factor(geneIds, levels = unique(geneIds))
+
+counts = Wang2014counts[ , -c(1:2)]
+colData = data.frame(cellType = rep(c("HL60", "KBM7"), each = 2), condition = factor(c(0, 1, 0, 1)))
+rownames(colData) = colnames(counts)
+Wang2014DESeq = DESeq2::DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~condition)
+Wang2014DESeq = DESeq2::DESeq(Wang2014DESeq)
+Wang2014DESeq = DESeq2::results(Wang2014DESeq)
+log2fc = Wang2014DESeq$log2FoldChange
+log2fc.negCtrl = log2fc[which.negCtrl]
+log2fc.geneTargeting = log2fc[-which.negCtrl]
+library(ggplot2)
+ggplot(data.frame(log2fc = log2fc, category = c(rep("negative control", times = length(which.negCtrl)), rep("gene targeting", times = length(log2fc.geneTargeting)))), aes(x = log2fc, colour = category)) + geom_density() + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+devtools::install_github("timydaley/CRISPhieRmix")
+library(CRISPhieRmix)
+Wang2014CRISPhieRmix = CRISPhieRmix::CRISPhieRmix(x = log2fc.geneTargeting, geneIds = geneIds, negCtrl = log2fc.negCtrl, mu = -5, sigma = 2, PLOT = TRUE, VERBOSE = TRUE) 
+hist(Wang2014CRISPhieRmix$FDR, breaks = 100)
+
+write.table(data.frame(Spacer = Wang2014counts$sgRNA, Gene = Wang2014counts$Gene, Wang2014counts[, -c(1:2)]), file = "Wang2014Counts.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+write.table(Wang2014counts$sgRNA[which.negCtrl], file = "NegCtrlGuides.txt", sep = "\n", quote = FALSE, row.names = FALSE, col.names = FALSE)
+system("mageck mle -k Wang2014Counts.txt -d design_matrix.txt --output-prefix Wang2014MageckMle --control-sgrna NegCtrlGuides.txt")
+Wang2014Mageck = read.table(file = "Wang2014MageckMle.gene_summary.txt", header = TRUE, sep = "\t")
+hist(Wang2014Mageck$condition.fdr, breaks = 100)
+
+MannWhitneyPvals = sapply(unique(geneIds), function(g) return(wilcox.test(x = log2fc.geneTargeting[which(geneIds == g)], log2fc.negCtrl, paired = FALSE)$p.value))
+names(MannWhitneyPvals) = unique(geneIds)
+MannWhitneyFdrs = p.adjust(MannWhitneyPvals, method = "BH")
+hist(MannWhitneyFdrs, breaks = 100)
+```
+
+```{r cache=TRUE}
+ConstitutiveCoreEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/ConstitutiveCoreEssentialGenes.txt", what = character())
+NonEssentialGenes = scan("~/sgRNA/sgRNA2Groups/data/Weissman/NonEssentialGenes.txt", what = character())
+EssentialGenes = data.frame(gene = factor(c(sapply(ConstitutiveCoreEssentialGenes, toString), sapply(NonEssentialGenes, toString))), essential = c(rep(1, times = length(ConstitutiveCoreEssentialGenes)), rep(0, times = length(NonEssentialGenes))))
+EssentialGenes = EssentialGenes[which(EssentialGenes$gene %in% Wang2014counts$Gene), ]
+
+sum(unique(Wang2014counts$Gene) %in% ConstitutiveCoreEssentialGenes)
+sum(unique(Wang2014counts$Gene) %in% NonEssentialGenes)
+Wang2014CRISPhieRmixScoresEssential = data.frame(gene = Wang2014CRISPhieRmix$genes, FDR = Wang2014CRISPhieRmix$FDR)
+Wang2014CRISPhieRmixScoresEssential = Wang2014CRISPhieRmixScoresEssential[which(Wang2014CRISPhieRmixScoresEssential$gene %in% EssentialGenes$gene), ]
+Wang2014CRISPhieRmixScoresEssential = Wang2014CRISPhieRmixScoresEssential[match(EssentialGenes$gene, Wang2014CRISPhieRmixScoresEssential$gene), ]
+dim(Wang2014CRISPhieRmixScoresEssential)
+Wang2014MageckEssential = Wang2014Mageck[which(Wang2014Mageck$Gene %in% EssentialGenes$gene), ]
+Wang2014MageckEssential = Wang2014MageckEssential[match(EssentialGenes$gene, Wang2014MageckEssential$Gene), ]
+dim(Wang2014MageckEssential)
+
+sum(Wang2014CRISPhieRmixScoresEssential$FDR < 0.05)
+sum(Wang2014CRISPhieRmixScoresEssential$FDR < 0.05 & EssentialGenes$essential == 1)
+sum(Wang2014CRISPhieRmixScoresEssential$FDR < 0.1)
+sum(Wang2014CRISPhieRmixScoresEssential$FDR < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Wang2014CRISPhieRmixScoresEssentialROC = roc(EssentialGenes$essential, Wang2014CRISPhieRmixScoresEssential$FDR)
+Wang2014CRISPhieRmixScoresEssentialROC
+
+sum(Wang2014MageckEssential$condition.fdr < 0.05)
+sum(Wang2014MageckEssential$condition.fdr < 0.05 & EssentialGenes$essential == 1)
+sum(Wang2014MageckEssential$condition.fdr < 0.1)
+sum(Wang2014MageckEssential$condition.fdr < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+Wang2014MageckEssentialROC = roc(EssentialGenes$essential, Wang2014MageckEssential$condition.fdr)
+Wang2014MageckEssentialROC
+
+MannWhitneyFdrs = MannWhitneyFdrs[which(names(MannWhitneyFdrs) %in% EssentialGenes$gene)]
+MannWhitneyFdrs = MannWhitneyFdrs[match(EssentialGenes$gene, names(MannWhitneyFdrs))]
+sum(MannWhitneyFdrs < 0.05)
+sum(MannWhitneyFdrs < 0.05 & EssentialGenes$essential == 1)
+sum(MannWhitneyFdrs < 0.1)
+sum(MannWhitneyFdrs < 0.1 & EssentialGenes$essential == 1)
+library(pROC)
+MannWhitneyFdrsROC = roc(EssentialGenes$essential, MannWhitneyFdrs)
+MannWhitneyFdrsROC
+
+cols = RColorBrewer::brewer.pal(6, "Set1")
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Wang2014MageckEssentialROC, col = cols[3], lwd = 2)
+lines(Wang2014CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Wang2014MageckEssentialROC$auc, digits = 2), ")"),  paste0("CRISPhieRmix (AUC = ", round(Wang2014CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 2)])
+pdf('Wang2014RocCurves.pdf')
+plot(MannWhitneyFdrsROC, col = cols[1], lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+lines(Wang2014MageckEssentialROC, col = cols[3], lwd = 2)
+lines(Wang2014CRISPhieRmixScoresEssentialROC, col = cols[2], lwd = 2)
+legend("bottomleft", legend = c( paste0("Mann-Whitney (AUC = ", round(MannWhitneyFdrsROC$auc, digits = 2), ")"), paste0("MAGeCK MLE (AUC = ", round(Wang2014MageckEssentialROC$auc, digits = 2), ")"),  paste0("CRISPhieRmix (AUC = ", round(Wang2014CRISPhieRmixScoresEssentialROC$auc, digits = 2), ")")), lty = 1, lwd = 2, col = cols[c(1, 3, 2)])
+dev.off()
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+s = seq(from = 0, to = 1, length = 1001)
+Wang2014CRISPhieRmixScoresEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Wang2014CRISPhieRmixScoresEssential$FDR, EssentialGenes$essential))
+MannWhitneyFdrsFdrCurve = sapply(s, function(t) fdr.curve(t, MannWhitneyFdrs, EssentialGenes$essential))
+Wang2014MageckEssentialFdrCurve = sapply(s, function(t) fdr.curve(t, Wang2014MageckEssential$condition.fdr, EssentialGenes$essential))
+
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Wang2014MageckEssentialFdrCurve)]), c(0, Wang2014MageckEssentialFdrCurve[!is.na(Wang2014MageckEssentialFdrCurve)]), col = cols [3])
+lines(c(0, s[!is.na(Wang2014CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Wang2014CRISPhieRmixScoresEssentialFdrCurve[!is.na(Wang2014CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2])
+legend("bottomright", legend = c("MAGeCK MLE", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 1, 2)], lty = 1)
+abline(0, 1)
+pdf('Wang2014EmpiricalVsEstimatedFdr.pdf')
+plot(c(0, s[!is.na(MannWhitneyFdrsFdrCurve)]), c(0, MannWhitneyFdrsFdrCurve[!is.na(MannWhitneyFdrsFdrCurve)]), type = "l", xlab = "estimated FDR", ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1), lwd = 2, col = cols[1])
+lines(c(0, s[!is.na(Wang2014MageckEssentialFdrCurve)]), c(0, Wang2014MageckEssentialFdrCurve[!is.na(Wang2014MageckEssentialFdrCurve)]), col = cols [3])
+lines(c(0, s[!is.na(Wang2014CRISPhieRmixScoresEssentialFdrCurve)]), c(0, Wang2014CRISPhieRmixScoresEssentialFdrCurve[!is.na(Wang2014CRISPhieRmixScoresEssentialFdrCurve)]), col = cols [2])
+legend("bottomright", legend = c("MAGeCK MLE", "Mann-Whitney", "CRISPhieRmix"), col = cols[c(3, 1, 2)], lty = 1)
+abline(0, 1)
+dev.off()
+```

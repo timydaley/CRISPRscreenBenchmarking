@@ -1,0 +1,23 @@
+---
+title: "Convert sequences to fasta file"
+author: "Timothy Daley"
+date: "6/4/2018"
+output: html_document
+---
+
+```{r}
+setwd("~/sgRNA/sgRNA2Groups/data/Weissman/")
+guides = read.table(file = "20140519_ricintilingFinal.txt", sep = "\t", header = TRUE)
+library(seqinr);
+
+write_seqs <- function(seqs, names, filename){
+	stopifnot(dim(seqs)[1] == length(names))
+	write.fasta(file.out = filename, sequences = seqs[1], names =  toString(names[1]), open = "w", nbchar = 80, as.string = TRUE)
+	if(length(names) > 1){
+	    for(i in 2:length(names)){
+	        write.fasta(file.out = filename, sequences = seqs[i], names =  toString(names[i]), open = "a", nbchar = 80, as.string = TRUE)
+	   	}
+  }
+}
+write_seqs(sapply(guides$aligned_seq, toString), sapply(guides$name, toString), "WeissmanTilingScreen.fa")
+```
